@@ -1,33 +1,42 @@
 import numpy as np
 
-np.random.seed(0)
+np.random.seed(1)
 
-time = np.linspace(0, 100, 500)
+time = np.linspace(0, 100, 600)
 
-# driving signal
-driver = np.sin(2 * np.pi * time / 10)
+# latent driver
+driver = np.sin(2 * np.pi * time / 8) + 0.3*np.random.randn(len(time))
 
-# create two bands with lag + smoothing
-def make_band(lag, smooth):
+def reprocess(lag, smooth):
     shifted = np.interp(time - lag, time, driver, left=0, right=0)
-    smoothed = np.convolve(shifted, np.ones(smooth)/smooth, mode="same")
-    return smoothed
+    return np.convolve(shifted, np.ones(smooth)/smooth, mode="same")
 
-flux_uv = make_band(lag=1.0, smooth=3)
-flux_opt = make_band(lag=3.0, smooth=10)
+# wavelength mapping (Angstroms)
+wavelengths = {
+    "xray": None,
+    "uv": 1500,
+    "optical": 5000,
+}
 
-# heteroscedastic errors
-sigma_uv = 0.05 + 0.02*np.random.rand(len(time))
-sigma_opt = 0.08 + 0.03*np.random.rand(len(time))
+flux_dict = {
+    "xray": driver + 0.2*np.random.randn(len(time)),
+    "uv": reprocess(lag=1.5, smooth=4),
+    "optical": reprocess(lag=4.0, smooth=12),
+}
 
-flux_uv += sigma_uv * np.random.randn(len(time))
-flux_opt += sigma_opt * np.random.randn(len(time))
+sigma_dict = {
+    "xray": 0.1*np.ones_like(time),
+    "uv": 0.05 + 0.02*np.random.rand(len(time)),
+    "optical": 0.08 + 0.03*np.random.rand(len(time)),
+}
+
+# add noise
+for k in flux_dict:
+    flux_dict[k] += sigma_dict[k] * np.random.randn(len(time))
 
 np.savez(
     "data/synthetic_lightcurves.npz",
     time=time,
-    flux_uv=flux_uv,
-    flux_opt=flux_opt,
-    sigma_uv=sigma_uv,
-    sigma_opt=sigma_opt,
+    **{f"flux_{k}": v for k, v in flux_dict.items()},
+    **{f"sigma_{k}": v for k, v in sigma_dict.items()},
 )

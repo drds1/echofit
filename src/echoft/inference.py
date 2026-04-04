@@ -3,18 +3,22 @@ import numpyro
 import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS
 
-from .model import evaluate_model_multiband
+from .model import evaluate_echo_model
 from .config import frequencies, SIGMA
 
-def numpyro_model(time, flux_dict, sigma_dict):
+def numpyro_model(time, flux_dict, sigma_dict, wavelengths):
+
     M_BH = numpyro.sample("M_BH", dist.LogNormal(np.log(1e8), 1.0))
     acc_rate = numpyro.sample("acc_rate", dist.LogNormal(np.log(0.1), 1.0))
     incl = numpyro.sample("incl", dist.Uniform(0, np.pi/2))
 
-    model_dict, _ = evaluate_model_multiband(
-        time, flux_dict, sigma_dict,
+    model_dict, _ = evaluate_echo_model(
+        time,
+        flux_dict,
+        sigma_dict,
+        wavelengths,
         (M_BH, acc_rate, incl),
-        frequencies
+        frequencies,
     )
 
     for band in flux_dict:
