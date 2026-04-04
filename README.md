@@ -1,4 +1,4 @@
-# AGN Reverberation Mapping MCMC (Modern Python)
+# AGN Reverberation Mapping MCMC (In progress)
 
 See src/ for implementation and data/ for synthetic dataset.
 
