@@ -1,0 +1,7 @@
+numpy
+scipy
+jax
+jaxlib
+numpyro
+matplotlib
+arviz
