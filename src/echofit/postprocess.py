@@ -1,6 +1,7 @@
 import numpy as np
 from .model import evaluate_echo_model
 from .config import SIGMA, frequencies
+import arviz as az
 
 
 def reconstruct_lightcurve_samples(
