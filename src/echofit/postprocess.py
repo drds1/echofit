@@ -1,27 +1,36 @@
 import numpy as np
-import arviz as az
-
-from .model import evaluate_model
-from .config import frequencies, SIGMA
+from .model import evaluate_echo_model
+from .config import SIGMA, frequencies
 
 
-def reconstruct_lightcurve_samples(time, flux, samples, n_draws=100):
-    """
-    Generate posterior predictive light curves.
-    """
+def reconstruct_lightcurve_samples(
+    time_dict, flux_dict, sigma_dict, wavelengths, samples, n_draws=100
+):
+
     idx = np.random.choice(len(samples["M_BH"]), n_draws, replace=False)
 
     models = []
+
     for i in idx:
+
         params = (
             samples["M_BH"][i],
             samples["acc_rate"][i],
             samples["incl"][i],
         )
-        model_flux, _ = evaluate_model(time, flux, SIGMA, params, frequencies)
-        models.append(model_flux)
 
-    return np.array(models)
+        model_dict, _ = evaluate_echo_model(
+            time_dict,
+            flux_dict,
+            sigma_dict,
+            wavelengths,
+            params,
+            frequencies,
+        )
+
+        models.append(model_dict)
+
+    return models
 
 
 def summarise_posterior(models):

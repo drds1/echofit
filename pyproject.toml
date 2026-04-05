@@ -10,12 +10,12 @@ packages = [{ include = "echofit", from = "src" }]
 [tool.poetry.dependencies]
 python = "^3.10"
 numpy = "^1.26"
-scipy = "^1.11"
+scipy = ">=1.11,<1.13"
 jax = "^0.4"
 jaxlib = "^0.4"
 numpyro = "^0.13"
 matplotlib = "^3.8"
-arviz = "^0.16"
+arviz = ">=0.16,<0.18"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
