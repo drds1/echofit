@@ -1,6 +1,6 @@
 import numpy as np
 import jax.numpy as jnp
-from .model import evaluate_echo_model
+from .model import evaluate_echo_model_matrix
 from .echo_cache import EchoCache
 from .fourier_cache import build_fourier_matrices
 from .config import frequencies
@@ -64,7 +64,7 @@ def reconstruct_lightcurve_samples(
         # -------------------------------
         # 3. ECHO MODEL
         # -------------------------------
-        model_dict = evaluate_echo_model(
+        model_dict = evaluate_echo_model_matrix(
             cache,
             xray,
             params

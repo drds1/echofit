@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import arviz as az
 
 from .inference import run_inference, get_samples
-from .model import evaluate_echo_model
+from .model import evaluate_echo_model_matrix
 from .postprocess import to_arviz
 from .config import frequencies
 
@@ -153,7 +153,7 @@ class EchoFit:
                 self.samples["incl"][i],
             )
 
-            model_dict, _ = evaluate_echo_model(
+            model_dict, _ = evaluate_echo_model_matrix(
                 self.t_model,
                 self.time_dict,
                 self.flux_dict,

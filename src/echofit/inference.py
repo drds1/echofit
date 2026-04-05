@@ -1,34 +1,74 @@
+# src/echofit/inference.py
+
 import jax
 import jax.numpy as jnp
 import numpyro
-import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS
+import numpyro.distributions as dist
 
 from .echo_cache import EchoCache
 from .fourier_cache import build_fourier_matrices
-from .model import evaluate_echo_model
+from .model import evaluate_echo_model_matrix
 from .config import frequencies
 
 
 # =========================================================
-# BUILD STATIC DESIGN MATRICES (OUTSIDE NUMPYRO MODEL)
+# HELPER: build random walk precision matrix
+# =========================================================
+def build_rw_precision(K, sigma):
+
+    # first-order difference operator
+    D = jnp.eye(K) - jnp.eye(K, k=-1)
+    D = D[1:]  # remove first row
+
+    # precision = (D^T D) / sigma^2
+    Q = (D.T @ D) / (sigma ** 2)
+
+    # small regularisation
+    Q += 1e-6 * jnp.eye(K)
+
+    return Q
+
+
+# =========================================================
+# MODEL
 # =========================================================
 def model(time_dict, flux_dict, sigma_dict, wavelengths):
 
+    # ---------------------------------------------------------
+    # STATIC PRECOMPUTE (ONCE)
+    # ---------------------------------------------------------
     t_min = min([t.min() for t in time_dict.values()])
     t_max = max([t.max() for t in time_dict.values()])
-
     t_model = jnp.linspace(t_min, t_max, 2000)
 
-    # Fourier design matrix (FIXED)
+    # Fourier design
     X_sin, X_cos = build_fourier_matrices(t_model, frequencies)
+    X = jnp.concatenate([X_sin, X_cos], axis=1)  # (T, 2K)
 
-    # Echo kernel cache (FIXED)
+    # Echo cache
     cache = EchoCache(t_model, wavelengths)
 
-    # =========================================================
+    # Pre-stack data
+    y_list = []
+    sigma_list = []
+    interp_indices = []
+
+    for band in flux_dict:
+        if band == "xray":
+            continue
+
+        y_list.append(flux_dict[band])
+        sigma_list.append(sigma_dict[band])
+
+        interp_indices.append(time_dict[band])
+
+    y_data = jnp.concatenate(y_list)
+    sigma_data = jnp.concatenate(sigma_list)
+
+    # ---------------------------------------------------------
     # NUMPYRO MODEL
-    # =========================================================
+    # ---------------------------------------------------------
     def _model():
 
         # -------------------------------
@@ -40,84 +80,75 @@ def model(time_dict, flux_dict, sigma_dict, wavelengths):
 
         params = (M_BH, acc_rate, incl)
 
-        # =========================================================
-        # 2. FOURIER RANDOM WALK PRIOR
-        # =========================================================
-        K = len(frequencies)
-
+        # -------------------------------
+        # 2. RANDOM WALK PRIOR STRENGTH
+        # -------------------------------
         sigma_rw = numpyro.sample("sigma_rw", dist.LogNormal(0.0, 1.0))
 
-        a0 = numpyro.sample("a0", dist.Normal(0.0, 1.0))
-        b0 = numpyro.sample("b0", dist.Normal(0.0, 1.0))
+        K = X.shape[1]
 
-        da = numpyro.sample("da", dist.Normal(0.0, sigma_rw).expand([K - 1]))
-        db = numpyro.sample("db", dist.Normal(0.0, sigma_rw).expand([K - 1]))
+        Q = build_rw_precision(K, sigma_rw)  # prior precision
 
-        a = jnp.concatenate([jnp.array([a0]), a0 + jnp.cumsum(da)])
-        b = jnp.concatenate([jnp.array([b0]), b0 + jnp.cumsum(db)])
+        # -----------------------------------------------------
+        # 3. BUILD DESIGN MATRIX A(θ)
+        # -----------------------------------------------------
 
-        # =========================================================
-        # 3. FOURIER RECONSTRUCTION
-        # =========================================================
-        sin_part = jnp.sum(X_sin * a, axis=1)
-        cos_part = jnp.sum(X_cos * b, axis=1)
-
-        xray_model = sin_part + cos_part
-
-        # =========================================================
-        # 4. X-RAY LIKELIHOOD (OPTIONAL)
-        # =========================================================
-        if "xray" in time_dict:
-
-            xray_interp = jnp.interp(
-                time_dict["xray"],
-                t_model,
-                xray_model
-            )
-
-            numpyro.sample(
-                "obs_xray",
-                dist.Normal(xray_interp, sigma_dict["xray"]),
-                obs=flux_dict["xray"]
-            )
-
-        # =========================================================
-        # 5. ECHO MODEL
-        # =========================================================
-        model_dict = evaluate_echo_model(
+        # 🔥 VECTORISED ECHO PROPAGATION
+        model_dict = evaluate_echo_model_matrix(
             cache,
-            xray_model,
+            X,
             params
         )
-
-        # =========================================================
-        # 6. LIKELIHOOD
-        # =========================================================
-        for band in flux_dict.keys():
-
+        
+        # 🔥 BUILD A MATRIX WITHOUT LOOPING OVER K
+        A_blocks = []
+        
+        for band in flux_dict:
             if band == "xray":
                 continue
+            
+            Y = model_dict[band]  # (T, K)
+        
+            interp = jnp.vstack([
+                jnp.interp(time_dict[band], t_model, Y[:, i])
+                for i in range(Y.shape[1])
+            ]).T  # (N_band, K)
+        
+            A_blocks.append(interp)
+        
+        A = jnp.concatenate(A_blocks, axis=0)
 
-            A = numpyro.sample(f"A_{band}", dist.Normal(1.0, 1.0))
-            C = numpyro.sample(f"C_{band}", dist.Normal(0.0, 1.0))
+        # -----------------------------------------------------
+        # 4. LINEAR SOLVE (RIDGE WITH PRIOR)
+        # -----------------------------------------------------
 
-            model_interp = jnp.interp(
-                time_dict[band],
-                t_model,
-                model_dict[band]
-            )
+        Sigma_inv = jnp.diag(1.0 / (sigma_data ** 2))
 
-            numpyro.sample(
-                f"obs_{band}",
-                dist.Normal(A * model_interp + C, sigma_dict[band]),
-                obs=flux_dict[band]
-            )
+        At_Sinv = A.T @ Sigma_inv
+
+        precision = At_Sinv @ A + Q
+
+        rhs = At_Sinv @ y_data
+
+        beta_hat = jnp.linalg.solve(precision, rhs)
+
+        # -----------------------------------------------------
+        # 5. LOG LIKELIHOOD (CONDITIONAL)
+        # -----------------------------------------------------
+
+        y_model = A @ beta_hat
+
+        resid = (y_data - y_model) / sigma_data
+
+        loglike = -0.5 * jnp.sum(resid ** 2)
+
+        numpyro.factor("loglike", loglike)
 
     return _model
 
 
 # =========================================================
-# INFERENCE WRAPPER
+# INFERENCE
 # =========================================================
 def run_inference(
     time_dict,
