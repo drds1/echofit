@@ -1,34 +1,31 @@
 import jax.numpy as jnp
-from .kernel import disk_kernel
 
 
 def evaluate_echo_model(
-    t_model,
+    cache,
     xray,
     params,
-    wavelengths_dict,
 ):
-    """
-    Deterministic forward model.
-
-    NO Fourier fitting here.
-    NO MCMC here.
-    """
 
     M_BH, acc_rate, incl = params
 
+    x = jnp.asarray(xray)
+
+    dt_matrix = cache.dt_matrix
+
     model_dict = {}
 
-    for band, wavelength in wavelengths_dict.items():
+    tau0 = (M_BH / 1e8) ** (1 / 3) * (acc_rate) ** (1 / 3)
+    width = 0.3 + 0.7 * jnp.sin(incl)
 
-        K = disk_kernel(
-            t_model,
-            M_BH,
-            acc_rate,
-            incl,
-            wavelength,
-        )
+    for band, wavelength in zip(cache.bands, cache.wavelengths):
 
-        model_dict[band] = K @ xray
+        tau_lambda = tau0 * (wavelength / 5000.0) ** (4 / 3)
+
+        kernel = jnp.exp(-0.5 * ((dt_matrix - tau_lambda) / width) ** 2)
+
+        kernel = kernel / jnp.sum(kernel, axis=1, keepdims=True)
+
+        model_dict[band] = jnp.matmul(kernel, x)
 
     return model_dict
