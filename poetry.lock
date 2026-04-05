@@ -812,7 +812,7 @@ jaxlib = "0.4.38"
 ml_dtypes = ">=0.4.0"
 numpy = [
     {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
-    {version = ">=1.24", markers = "python_version < \"3.12\""},
+    {version = ">=1.24"},
 ]
 opt_einsum = "*"
 scipy = [
@@ -866,7 +866,7 @@ ml-dtypes = ">=0.2.0"
 numpy = ">=1.24"
 scipy = [
     {version = ">=1.11.1", markers = "python_version >= \"3.12\""},
-    {version = ">=1.10"},
+    {version = ">=1.10", markers = "python_version < \"3.12\""},
 ]
 
 [[package]]

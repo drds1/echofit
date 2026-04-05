@@ -1,11 +1,11 @@
 [tool.poetry]
-name = "echoft"
+name = "echofit"
 version = "0.1.0"
 description = "Fourier-domain AGN reverberation mapping with Bayesian inference"
 authors = ["Your Name <your.email@example.com>"]
 license = "MIT"
 readme = "README.md"
-packages = [{ include = "echoft", from = "src" }]
+packages = [{ include = "echofit", from = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.10"
