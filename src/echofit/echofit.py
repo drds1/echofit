@@ -3,12 +3,22 @@ from functools import cached_property
 import numpy as np
 import matplotlib.pyplot as plt
 import arviz as az
-
+from .predict import predict_lightcurves
 from .inference import run_inference, get_samples
 from .model import evaluate_echo_model_matrix
 from .postprocess import to_arviz
 from .config import frequencies
+import jax
+import jax.numpy as jnp
+import numpy as np
+import matplotlib.pyplot as plt
+from numpyro.infer import MCMC, NUTS
 
+from .inference import model
+from .fourier_cache import build_fourier_matrices
+from .echo_cache import EchoCache
+from .predict import predict_lightcurves
+from .config import frequencies
 
 class EchoFit:
 
@@ -297,3 +307,154 @@ class EchoFit:
             plt.ylabel("Flux")
             plt.legend()
             plt.show()
+
+    def run_mcmc_live(
+        self,
+        num_warmup=300,
+        num_steps=50,
+        num_rounds=20,
+        n_plot_draws=20,
+    ):
+        """
+        Run MCMC in chunks and visualize fitted light curves live.
+        """
+
+        self._validate()
+
+        # ---------------------------------------
+        # Shared model grid + caches
+        # ---------------------------------------
+        t_model = self.t_model
+        t_model_jax = jnp.array(t_model)
+
+        X_sin, X_cos = build_fourier_matrices(t_model_jax, frequencies)
+        X = jnp.concatenate([X_sin, X_cos], axis=1)
+
+        cache = EchoCache(t_model_jax, self.wavelengths)
+
+        # ---------------------------------------
+        # MCMC setup
+        # ---------------------------------------
+        rng_key = jax.random.PRNGKey(0)
+
+        kernel = NUTS(
+            model(
+                self.time_dict,
+                self.flux_dict,
+                self.sigma_dict,
+                self.wavelengths,
+            )
+        )
+
+        mcmc = MCMC(kernel, num_warmup=num_warmup, num_samples=num_steps)
+
+        state = None
+
+        # ---------------------------------------
+        # Plot setup
+        # ---------------------------------------
+        plt.ion()
+
+        bands = list(self.flux_dict.keys())
+
+        fig, axes = plt.subplots(
+            len(bands), 1,
+            figsize=(10, 3 * len(bands)),
+            sharex=True
+        )
+
+        if len(bands) == 1:
+            axes = [axes]
+
+        # store running posterior models
+        model_store = {band: [] for band in bands if band != "xray"}
+
+        # ---------------------------------------
+        # MCMC loop
+        # ---------------------------------------
+        for i in range(num_rounds):
+
+            rng_key, subkey = jax.random.split(rng_key)
+
+            mcmc.run(subkey, init_params=state)
+            state = mcmc.post_warmup_state
+
+            samples = mcmc.get_samples()
+
+            # select last few samples from this chunk
+            n_samples = len(samples["M_BH"])
+            idx = np.arange(max(0, n_samples - n_plot_draws), n_samples)
+
+            # ---------------------------------------
+            # Evaluate model for selected samples
+            # ---------------------------------------
+            for j in idx:
+
+                params = (
+                    samples["M_BH"][j],
+                    samples["acc_rate"][j],
+                    samples["incl"][j],
+                )
+
+                sigma_rw = samples["sigma_rw"][j]
+
+                model_dict = predict_lightcurves(
+                    cache,
+                    X,
+                    t_model_jax,
+                    self.time_dict,
+                    self.flux_dict,
+                    self.sigma_dict,
+                    self.wavelengths,
+                    params,
+                    sigma_rw,
+                )
+
+                for band in model_store:
+                    model_store[band].append(np.array(model_dict[band]))
+
+            # ---------------------------------------
+            # Plot update
+            # ---------------------------------------
+            for ax, band in zip(axes, bands):
+
+                ax.clear()
+
+                t = self.time_dict[band]
+                y = self.flux_dict[band]
+
+                ax.errorbar(
+                    t,
+                    y,
+                    yerr=self.sigma_dict[band],
+                    fmt=".",
+                    alpha=0.4,
+                )
+
+                # plot posterior envelope (non-xray bands)
+                if band != "xray" and len(model_store[band]) > 5:
+
+                    models = np.array(model_store[band])
+
+                    median = np.median(models, axis=0)
+                    lo = np.percentile(models, 16, axis=0)
+                    hi = np.percentile(models, 84, axis=0)
+
+                    median_i = np.interp(t, t_model, median)
+                    lo_i = np.interp(t, t_model, lo)
+                    hi_i = np.interp(t, t_model, hi)
+
+                    ax.plot(t, median_i, label="model")
+                    ax.fill_between(t, lo_i, hi_i, alpha=0.3)
+
+                ax.set_title(f"{band} (round {i+1}/{num_rounds})")
+                ax.grid(alpha=0.2)
+
+            plt.pause(0.1)
+
+        plt.ioff()
+        plt.show()
+
+        # store final results
+        self.mcmc = mcmc
+        self.samples = mcmc.get_samples()
