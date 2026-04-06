@@ -5,10 +5,14 @@ import arviz as az
 import jax
 
 from numpyro.infer import MCMC, NUTS
+import jax.numpy as jnp
 
 from .context import ModelContext
 from .inference import model, run_inference
 from .postprocess import to_arviz
+import jax
+from .forward_model import forward_model, forward_model_grid
+from .model import evaluate_echo_model_matrix
 
 
 class EchoFit:
@@ -88,6 +92,52 @@ class EchoFit:
             wavelengths=self.wavelengths,
         )
 
+    def compute_beta_posterior(self):
+
+        ctx = self.ctx
+        samples = self.samples
+
+        i = 0  # just use MAP sample for stability (first fix)
+
+        params = (
+            float(samples["M_BH"][i]),
+            float(samples["acc_rate"][i]),
+            float(samples["incl"][i]),
+        )
+
+        sigma_rw = float(samples["sigma_rw"][i])
+
+        # rebuild A
+        model_dict = evaluate_echo_model_matrix(
+            ctx.cache,
+            ctx.X,
+            params
+        )
+
+        A_blocks = []
+        for b in ctx.bands:
+            A_blocks.append(model_dict[b][ctx.interp_idx[b], :])
+
+        A = jnp.concatenate(A_blocks, axis=0)
+
+        # SAME PRIOR AS BEFORE
+        K = A.shape[1]
+        D = jnp.eye(K) - jnp.eye(K, k=-1)
+        D = D[1:]
+
+        Q_prior = (D.T @ D) / (sigma_rw ** 2) + 1e-6 * jnp.eye(K)
+
+        Sigma = jnp.diag(ctx.sigma_data ** 2)
+
+        Sigma_y = A @ jnp.linalg.inv(Q_prior) @ A.T + Sigma
+        Sigma_y_inv = jnp.linalg.inv(Sigma_y)
+
+        y = ctx.y_data
+
+        beta_mean = jnp.linalg.inv(Q_prior) @ A.T @ Sigma_y_inv @ y
+
+        ctx.beta_mean = beta_mean
+
     # --------------------------------------------------
     # INFERENCE (NUTS)
     # --------------------------------------------------
@@ -99,12 +149,31 @@ class EchoFit:
             self.build_context()
 
         self.mcmc = run_inference(
-            self.ctx,
-            num_warmup=num_warmup,
-            num_samples=num_samples,
+        self.ctx.X,
+        self.ctx.y_data,
+        self.ctx.sigma_data,
+        self.ctx.cache,
+        self.ctx.interp_idx,
+        self.ctx.bands,
+        self.ctx.band_sizes,
+        self.ctx.t_model,
+        num_warmup,
+        num_samples,
         )
 
         self.samples = self.mcmc.get_samples()
+
+        self.ctx.beta_mean = np.mean(self.samples["beta"], axis=0)
+        self.ctx.beta_cov = np.cov(self.samples["beta"], rowvar=False)
+        print("=== BETA DEBUG ===")
+        print("beta_mean:", self.ctx.beta_mean)
+        print("norm:", jnp.linalg.norm(self.ctx.beta_mean))
+        print("max:", jnp.max(jnp.abs(self.ctx.beta_mean)))
+        print("=== BETA DEBUG ===")
+        print("beta_mean:", self.ctx.beta_mean)
+        print("norm:", jnp.linalg.norm(self.ctx.beta_mean))
+        print("max:", jnp.max(jnp.abs(self.ctx.beta_mean)))
+        self.compute_beta_posterior()
         self.idata = to_arviz(self.mcmc)
 
     # --------------------------------------------------
@@ -285,15 +354,145 @@ class EchoFit:
         return "tab:red"
 
     def plot_trace(self):
-        az.plot_trace(self.idata)
+
+        idata = self.idata
+
+        # force full numpy conversion (safety net)
+        for var in idata.posterior.data_vars:
+            idata.posterior[var].values = np.array(idata.posterior[var].values)
+
+        az.plot_trace(idata)
         plt.show()
 
     def summary(self):
         return az.summary(self.idata)
 
     def plot_posteriors(self):
-        az.plot_posterior(self.idata)
+
+        idata = self.idata
+
+        # force clean numeric arrays
+        for var in idata.posterior.data_vars:
+            vals = np.array(idata.posterior[var].values)
+
+            vals = vals[np.isfinite(vals)]
+
+            if vals.size == 0:
+                continue
+
+            idata.posterior[var].values = np.nan_to_num(
+                idata.posterior[var].values,
+                nan=np.median(vals),
+                posinf=np.percentile(vals, 99),
+                neginf=np.percentile(vals, 1),
+            )
+
+        az.plot_posterior(
+            idata,
+            round_to=3,
+            point_estimate="mean",
+            skipna=True,
+        )
+
+    def plot_lightcurves(self, num_samples=50):
+
+        ctx = self.ctx
+        samples = self.samples
+        nsamples = len(samples["M_BH"])
+
+        idx = np.random.choice(
+            nsamples,
+            size=min(num_samples, nsamples),
+            replace=False
+        )
+
+        grid_models = {b: [] for b in ctx.bands}
+
+        # ---------------------------------------
+        # posterior sampling
+        # ---------------------------------------
+        for i in idx:
+
+            params = (
+                float(samples["M_BH"][i]),
+                float(samples["acc_rate"][i]),
+                float(samples["incl"][i]),
+            )
+
+            sigma_rw = float(samples["sigma_rw"][i])
+
+            C = np.array(samples["C"][i])
+            S = np.exp(np.array(samples["logS"][i]))
+
+            model_grid = forward_model_grid(
+                ctx.cache,
+                ctx.X,
+                ctx,
+                params,
+                sigma_rw,
+                C,
+                S,
+            )
+
+            for b in ctx.bands:
+                grid_models[b].append(np.array(model_grid[b]))
+
+        # ---------------------------------------
+        # plotting
+        # ---------------------------------------
+        fig, axes = plt.subplots(
+            len(ctx.bands),
+            1,
+            figsize=(10, 3 * len(ctx.bands))
+        )
+
+        if len(ctx.bands) == 1:
+            axes = [axes]
+
+        t_model = np.array(ctx.t_model)
+
+        for ax, b in zip(axes, ctx.bands):
+
+            models = np.array(grid_models[b])
+
+            median = np.median(models, axis=0)
+            lo = np.percentile(models, 16, axis=0)
+            hi = np.percentile(models, 84, axis=0)
+
+            # ---------------------------------------
+            # 🔥 DENORMALISE MODEL
+            # ---------------------------------------
+            median = median * ctx.y_std + ctx.y_mean
+            lo = lo * ctx.y_std + ctx.y_mean
+            hi = hi * ctx.y_std + ctx.y_mean
+
+            # MODEL
+            ax.plot(t_model, median, lw=2, label="model")
+            ax.fill_between(t_model, lo, hi, alpha=0.3)
+
+            # ---------------------------------------
+            # DATA (DENORMALISED)
+            # ---------------------------------------
+            t_data = np.array(self.time_dict[b])
+            y_data = np.array(self.flux_dict[b])
+            y_err = np.array(self.sigma_dict[b])
+
+            ax.errorbar(
+                t_data,
+                y_data,
+                yerr=y_err,
+                fmt=".",
+                alpha=0.6,
+                label="data"
+            )
+
+            ax.set_title(f"{b}")
+            ax.legend()
+            ax.grid(alpha=0.2)
+
+        plt.tight_layout()
         plt.show()
+
 
     def plot_raw_lightcurve_data(
         self, normalize=False, errorbars=True, title="Observed light curves"

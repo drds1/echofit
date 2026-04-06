@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from .model import evaluate_echo_model_matrix
 from .echo_cache import EchoCache
 from .fourier_cache import build_fourier_matrices
-from .config import frequencies
+from .context import build_frequencies
 import arviz as az
 
 
@@ -23,6 +23,7 @@ def reconstruct_lightcurve_samples(
 
     cache = EchoCache(t_model, wavelengths)
 
+    frequencies = build_frequencies(time_dict)
     X_sin, X_cos = build_fourier_matrices(t_model, frequencies)
 
     models = []
@@ -96,4 +97,12 @@ def summarise_posterior(models):
 # ARVIZ WRAPPER
 # =========================================================
 def to_arviz(mcmc):
-    return az.from_numpyro(mcmc)
+
+    samples = mcmc.get_samples()
+
+    # convert ALL JAX arrays → numpy
+    samples_np = {
+        k: np.array(v) for k, v in samples.items()
+    }
+
+    return az.from_dict(posterior=samples_np)
