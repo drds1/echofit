@@ -812,7 +812,7 @@ jaxlib = "0.4.38"
 ml_dtypes = ">=0.4.0"
 numpy = [
     {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
-    {version = ">=1.24", markers = "python_version < \"3.12\""},
+    {version = ">=1.24"},
 ]
 opt_einsum = "*"
 scipy = [
@@ -866,8 +866,27 @@ ml-dtypes = ">=0.2.0"
 numpy = ">=1.24"
 scipy = [
     {version = ">=1.11.1", markers = "python_version >= \"3.12\""},
-    {version = ">=1.10"},
+    {version = ">=1.10", markers = "python_version < \"3.12\""},
 ]
+
+[[package]]
+name = "jaxopt"
+version = "0.8.5"
+description = "Hardware accelerated, batchable and differentiable optimizers in JAX."
+optional = false
+python-versions = "*"
+groups = ["main"]
+markers = "sys_platform == \"win32\" or sys_platform == \"emscripten\" or sys_platform != \"win32\" and sys_platform != \"emscripten\""
+files = [
+    {file = "jaxopt-0.8.5-py3-none-any.whl", hash = "sha256:ff221d1a86908ec759eb1e219ee1d12bf208a70707e961bf7401076fe7cf4d5e"},
+    {file = "jaxopt-0.8.5.tar.gz", hash = "sha256:2790bd68ef132b216c083a8bc7a2704eceb35a92c0fc0a1e652e79dfb1e9e9ab"},
+]
+
+[package.dependencies]
+jax = ">=0.2.18"
+jaxlib = ">=0.1.69"
+numpy = ">=1.18.4"
+scipy = ">=1.0.0"
 
 [[package]]
 name = "jedi"
@@ -2457,4 +2476,4 @@ test = ["hypothesis", "packaging", "preliz (>=0.19)", "pytest", "pytest-cov", "s
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "8dbf4f7a840964b0ec5f003cc0a69e6edb48b83237e574527bf7eb3c9f668b1c"
+content-hash = "f8afbc8f7561560d2e3a744055a1c1cf286f3df9dc6a782198e812c0380da04a"

@@ -11,12 +11,7 @@ import arviz as az
 # RECONSTRUCT LIGHTCURVES FROM POSTERIOR SAMPLES
 # =========================================================
 def reconstruct_lightcurve_samples(
-    time_dict,
-    flux_dict,
-    sigma_dict,
-    wavelengths,
-    samples,
-    n_draws=100
+    time_dict, flux_dict, sigma_dict, wavelengths, samples, n_draws=100
 ):
 
     idx = np.random.choice(len(samples["M_BH"]), n_draws, replace=False)
@@ -64,11 +59,7 @@ def reconstruct_lightcurve_samples(
         # -------------------------------
         # 3. ECHO MODEL
         # -------------------------------
-        model_dict = evaluate_echo_model_matrix(
-            cache,
-            xray,
-            params
-        )
+        model_dict = evaluate_echo_model_matrix(cache, xray, params)
 
         models.append(model_dict)
 

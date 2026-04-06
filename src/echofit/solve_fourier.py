@@ -30,7 +30,4 @@ def reconstruct_fourier(t, a, b, frequencies):
     omega = 2 * jnp.pi * jnp.asarray(frequencies)
     phase = jnp.outer(t, omega)
 
-    return jnp.sum(
-        a * jnp.sin(phase) + b * jnp.cos(phase),
-        axis=1
-    )
+    return jnp.sum(a * jnp.sin(phase) + b * jnp.cos(phase), axis=1)

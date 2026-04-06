@@ -9,7 +9,7 @@ def build_rw_precision(K, sigma):
     D = jnp.eye(K) - jnp.eye(K, k=-1)
     D = D[1:]  # remove first row
 
-    Q = (D.T @ D) / (sigma ** 2)
+    Q = (D.T @ D) / (sigma**2)
 
     # small regularisation
     Q += 1e-6 * jnp.eye(K)

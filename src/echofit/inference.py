@@ -1,82 +1,64 @@
-# src/echofit/inference.py
-
 import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS
-from .echo_cache import EchoCache
-from .fourier_cache import build_fourier_matrices
-from .config import frequencies
-from .interp_cache import build_interp_indices
+
+from jaxopt import ScipyMinimize
+
 from .forward import forward_model
 
 
-def model(time_dict, flux_dict, sigma_dict, wavelengths):
+# =========================================================
+# NUMPYRO MODEL
+# =========================================================
+def model(ctx):
 
-    # ---------------------------------------
-    # STATIC PRECOMPUTE (RUN ONCE)
-    # ---------------------------------------
-    t_min = min([t.min() for t in time_dict.values()])
-    t_max = max([t.max() for t in time_dict.values()])
-    t_model = jnp.linspace(t_min, t_max, 2000)
-
-    X_sin, X_cos = build_fourier_matrices(t_model, frequencies)
-    X = jnp.concatenate([X_sin, X_cos], axis=1)
-
-    cache = EchoCache(t_model, wavelengths)
-
-    # 🔥 NEW: interpolation index cache (must be passed forward)
-    interp_idx = build_interp_indices(time_dict, t_model)
-
-    # ---------------------------------------
-    # NUMPYRO MODEL
-    # ---------------------------------------
     def _model():
 
         # -------------------------------
-        # 1. parameters
+        # 1. Disk parameters
         # -------------------------------
         M_BH = numpyro.sample("M_BH", dist.LogUniform(5, 10))
         acc_rate = numpyro.sample("acc_rate", dist.LogUniform(0.01, 1.0))
         incl = numpyro.sample("incl", dist.Uniform(0, 90))
 
-        sigma_rw = numpyro.sample("sigma_rw", dist.LogNormal(0.0, 1.0))
-
         params = (M_BH, acc_rate, incl)
 
         # -------------------------------
-        # 2. forward model
+        # 2. Random walk prior strength
+        # -------------------------------
+        sigma_rw = numpyro.sample("sigma_rw", dist.LogNormal(0.0, 1.0))
+
+        # -------------------------------
+        # 3. Per-band calibration
+        # -------------------------------
+        n_bands = len(ctx.bands)
+
+        C = numpyro.sample("C", dist.Normal(0.0, 10.0).expand([n_bands]))
+
+        S = numpyro.sample("S", dist.LogNormal(0.0, 1.0).expand([n_bands]))
+
+        # -------------------------------
+        # 4. Forward model (NOW INCLUDES C/S)
         # -------------------------------
         y_model = forward_model(
-            cache,
-            X,
-            t_model,
-            interp_idx,      # 🔥 IMPORTANT FIX
-            time_dict,
-            flux_dict,
-            sigma_dict,
+            ctx.cache,
+            ctx.X,
+            ctx.t_model,
+            ctx.interp_idx,
+            ctx,
             params,
             sigma_rw,
+            C,
+            S,
         )
 
         # -------------------------------
-        # 3. likelihood
+        # 5. Likelihood
         # -------------------------------
-        y_list = []
-        sigma_list = []
-
-        for band in flux_dict:
-            if band == "xray":
-                continue
-            y_list.append(flux_dict[band])
-            sigma_list.append(sigma_dict[band])
-
-        y_data = jnp.concatenate(y_list)
-        sigma_data = jnp.concatenate(sigma_list)
-
-        resid = (y_data - y_model) / sigma_data
-        loglike = -0.5 * jnp.sum(resid ** 2)
+        resid = (ctx.y_data - y_model) / ctx.sigma_data
+        loglike = -0.5 * jnp.sum(resid**2)
 
         numpyro.factor("loglike", loglike)
 
@@ -84,22 +66,19 @@ def model(time_dict, flux_dict, sigma_dict, wavelengths):
 
 
 # =========================================================
-# INFERENCE
+# NUTS INFERENCE
 # =========================================================
-def run_inference(
-    time_dict,
-    flux_dict,
-    sigma_dict,
-    wavelengths,
-    num_warmup=500,
-    num_samples=1000
-):
+def run_inference(ctx, num_warmup=200, num_samples=1000):
 
     rng_key = jax.random.PRNGKey(0)
 
-    kernel = NUTS(model(time_dict, flux_dict, sigma_dict, wavelengths))
+    kernel = NUTS(model(ctx))
 
-    mcmc = MCMC(kernel, num_warmup=num_warmup, num_samples=num_samples)
+    mcmc = MCMC(
+        kernel,
+        num_warmup=num_warmup,
+        num_samples=num_samples,
+    )
 
     mcmc.run(rng_key)
 
@@ -108,3 +87,69 @@ def run_inference(
 
 def get_samples(mcmc):
     return mcmc.get_samples()
+
+
+# =========================================================
+# MAP (OPTIONAL)
+# =========================================================
+def make_logprob_fn(ctx):
+
+    def logprob(params):
+
+        M_BH, acc_rate, incl, sigma_rw = params
+
+        # NOTE: MAP does NOT include C/S unless you explicitly optimise them
+        # so we marginalise them out implicitly by fixing to 1 and 0
+
+        C = jnp.zeros(len(ctx.bands))
+        S = jnp.ones(len(ctx.bands))
+
+        y_model = forward_model(
+            ctx.cache,
+            ctx.X,
+            ctx.t_model,
+            ctx.interp_idx,
+            ctx,
+            (M_BH, acc_rate, incl),
+            sigma_rw,
+            C,
+            S,
+        )
+
+        # data concatenation
+        y_list = []
+        sigma_list = []
+
+        for band in ctx.bands:
+            y_list.append(ctx.flux_dict[band])
+            sigma_list.append(ctx.sigma_dict[band])
+
+        y_data = jnp.concatenate(y_list)
+        sigma_data = jnp.concatenate(sigma_list)
+
+        resid = (y_data - y_model) / sigma_data
+
+        return -0.5 * jnp.sum(resid**2)
+
+    return logprob
+
+
+def run_map(ctx):
+
+    logprob_fn = make_logprob_fn(ctx)
+
+    init_params = jnp.array(
+        [
+            6.0,
+            0.1,
+            45.0,
+            1.0,
+        ]
+    )
+
+    solver = ScipyMinimize(
+        method="L-BFGS-B",
+        fun=lambda p: -logprob_fn(p),
+    )
+
+    return solver.run(init_params)
