@@ -8,18 +8,13 @@ def forward_model(
     cache,
     X,
     t_model,
+    interp_idx,   # 🔥 NEW ARG
     time_dict,
     flux_dict,
     sigma_dict,
     params,
     sigma_rw,
 ):
-    """
-    Python orchestration:
-    builds A matrix, calls JIT core
-    """
-
-    M_BH, acc_rate, incl = params
 
     model_dict = evaluate_echo_model_matrix(cache, X, params)
 
@@ -36,10 +31,9 @@ def forward_model(
 
         Y = model_dict[band]
 
-        interp = jnp.vstack([
-            jnp.interp(time_dict[band], t_model, Y[:, k])
-            for k in range(Y.shape[1])
-        ]).T
+        # 🔥 FAST PATH: replace interpolation
+        idx = interp_idx[band]
+        interp = Y[idx, :]
 
         A_blocks.append(interp)
 

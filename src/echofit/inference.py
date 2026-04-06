@@ -3,27 +3,19 @@
 import jax
 import jax.numpy as jnp
 import numpyro
-from numpyro.infer import MCMC, NUTS
 import numpyro.distributions as dist
-
+from numpyro.infer import MCMC, NUTS
 from .echo_cache import EchoCache
 from .fourier_cache import build_fourier_matrices
 from .config import frequencies
-import jax.numpy as jnp
-import numpyro
-import numpyro.distributions as dist
-from .echo_cache import EchoCache
+from .interp_cache import build_interp_indices
 from .forward import forward_model
-from .config import frequencies
 
 
-# =========================================================
-# MODEL
-# =========================================================
 def model(time_dict, flux_dict, sigma_dict, wavelengths):
 
     # ---------------------------------------
-    # STATIC PRECOMPUTE
+    # STATIC PRECOMPUTE (RUN ONCE)
     # ---------------------------------------
     t_min = min([t.min() for t in time_dict.values()])
     t_max = max([t.max() for t in time_dict.values()])
@@ -34,32 +26,33 @@ def model(time_dict, flux_dict, sigma_dict, wavelengths):
 
     cache = EchoCache(t_model, wavelengths)
 
+    # 🔥 NEW: interpolation index cache (must be passed forward)
+    interp_idx = build_interp_indices(time_dict, t_model)
+
     # ---------------------------------------
     # NUMPYRO MODEL
     # ---------------------------------------
     def _model():
 
         # -------------------------------
-        # 1. Disk parameters
+        # 1. parameters
         # -------------------------------
         M_BH = numpyro.sample("M_BH", dist.LogUniform(5, 10))
         acc_rate = numpyro.sample("acc_rate", dist.LogUniform(0.01, 1.0))
         incl = numpyro.sample("incl", dist.Uniform(0, 90))
 
+        sigma_rw = numpyro.sample("sigma_rw", dist.LogNormal(0.0, 1.0))
+
         params = (M_BH, acc_rate, incl)
 
         # -------------------------------
-        # 2. Random walk prior strength
-        # -------------------------------
-        sigma_rw = numpyro.sample("sigma_rw", dist.LogNormal(0.0, 1.0))
-
-        # -------------------------------
-        # 3. Forward model
+        # 2. forward model
         # -------------------------------
         y_model = forward_model(
             cache,
             X,
             t_model,
+            interp_idx,      # 🔥 IMPORTANT FIX
             time_dict,
             flux_dict,
             sigma_dict,
@@ -68,7 +61,7 @@ def model(time_dict, flux_dict, sigma_dict, wavelengths):
         )
 
         # -------------------------------
-        # 4. Likelihood
+        # 3. likelihood
         # -------------------------------
         y_list = []
         sigma_list = []

@@ -25,9 +25,11 @@ def forward_core(
     # -------------------------
     # WEIGHTED LEAST SQUARES
     # -------------------------
-    Sigma_inv = jnp.diag(1.0 / (sigma_data ** 2))
+    #Sigma_inv = jnp.diag(1.0 / (sigma_data ** 2))
 
-    At_Sinv = A.T @ Sigma_inv
+    #At_Sinv = A.T @ Sigma_inv
+
+    At_Sinv = A.T * (1.0 / (sigma_data ** 2))
     precision = At_Sinv @ A + Q
     rhs = At_Sinv @ y_data
 
