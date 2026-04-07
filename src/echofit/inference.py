@@ -4,7 +4,7 @@ import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS
 from jax.scipy.linalg import cho_factor, cho_solve
 
-from .forward_model import lag_scaling, build_response_function
+from .forward_model import build_response_function
 
 
 # ----------------------------
@@ -95,19 +95,19 @@ def model(data):
             n2 = len(band2["t"])
 
             # interaction strength between bands
-            kernel_scale = jnp.sqrt(
-                jnp.sum(psi_list[b1]) *
-                jnp.sum(psi_list[b2])
+            kernel_scale = jnp.sqrt(jnp.sum(psi_list[b1]) * jnp.sum(psi_list[b2]))
+
+            block = (
+                kernel_scale
+                * K_drw[
+                    idx_i : idx_i + n1,
+                    idx_j : idx_j + n2,
+                ]
             )
 
-            block = kernel_scale * K_drw[
-                idx_i: idx_i + n1,
-                idx_j: idx_j + n2,
-            ]
-
             K = K.at[
-                idx_i: idx_i + n1,
-                idx_j: idx_j + n2,
+                idx_i : idx_i + n1,
+                idx_j : idx_j + n2,
             ].set(block)
 
             idx_j += n2
@@ -117,10 +117,9 @@ def model(data):
     # -------------------------
     # Mean model (ONLY offsets)
     # -------------------------
-    mean = jnp.concatenate([
-        C_list[i] * jnp.ones(len(b["t"]))
-        for i, b in enumerate(bands)
-    ])
+    mean = jnp.concatenate(
+        [C_list[i] * jnp.ones(len(b["t"])) for i, b in enumerate(bands)]
+    )
 
     # -------------------------
     # Stabilisation
@@ -135,11 +134,7 @@ def model(data):
 
     logdet = 2.0 * jnp.sum(jnp.log(jnp.diag(L)))
 
-    loglike = -0.5 * (
-        jnp.dot((y - mean), alpha)
-        + logdet
-        + N * jnp.log(2 * jnp.pi)
-    )
+    loglike = -0.5 * (jnp.dot((y - mean), alpha) + logdet + N * jnp.log(2 * jnp.pi))
 
     numpyro.factor("gp_loglike", loglike)
 

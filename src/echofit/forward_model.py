@@ -2,16 +2,21 @@ import jax.numpy as jnp
 from jax import jit
 from jax.scipy.signal import fftconvolve
 
-LAMBDA0 = 5000.0   # reference wavelength (Å or nm — be consistent)
+LAMBDA0 = 5000.0  # reference wavelength (Å or nm — be consistent)
 MDOT0 = 1.0
-M0 = 1.e8         # reference mass (solar masses)
-TAU0 = 10.0        # days (typical AGN lag scale)
+M0 = 1.0e8  # reference mass (solar masses)
+TAU0 = 10.0  # days (typical AGN lag scale)
 
 
 def lag_scaling(log_mdot, wavelength, M_BH):
     mdot = jnp.exp(log_mdot)
-    mu = TAU0 * ((mdot / MDOT0) * (M_BH / M0)) ** (1/3) * (wavelength / LAMBDA0) ** (4/3)
+    mu = (
+        TAU0
+        * ((mdot / MDOT0) * (M_BH / M0)) ** (1 / 3)
+        * (wavelength / LAMBDA0) ** (4 / 3)
+    )
     return mu
+
 
 def build_response_function(tau, log_mdot, wavelength, inclination, M_BH):
     mu = lag_scaling(log_mdot, wavelength, M_BH)
@@ -55,7 +60,6 @@ def compute_echo(driver, tau_grid, log_mdot, wavelength, inclination, M_BH):
 
     conv = fftconvolve(driver, psi, mode="full")
     return conv[: driver.shape[0]]
-
 
 
 def drw_covariance(t, sigma, tau):

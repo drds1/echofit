@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
 import numpy as np
-from .forward_model import lag_scaling, compute_echo
+from .forward_model import compute_echo
 from .forward_model import build_response_function
 
 
@@ -155,7 +155,7 @@ def plot_lightcurve_fits(samples, data):
 
 def plot_mcmc_diagnostics(mcmc):
     samples = mcmc.get_samples()
-    
+
     param_names = list(samples.keys())
 
     n_params = len(param_names)

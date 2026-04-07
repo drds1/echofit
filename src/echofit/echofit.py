@@ -14,7 +14,12 @@ class EchoFit:
 
     def add_lightcurve(self, t, y, yerr, wavelength):
         self.bands.append(
-            dict(t=jnp.array(t), y=jnp.array(y), yerr=jnp.array(yerr), wavelength=wavelength)
+            dict(
+                t=jnp.array(t),
+                y=jnp.array(y),
+                yerr=jnp.array(yerr),
+                wavelength=wavelength,
+            )
         )
 
     def build_grid(self):
@@ -39,12 +44,13 @@ class EchoFit:
     def fit(self, num_warmup=500, num_samples=1000):
         self.build_grid()
         rng_key = jax.random.PRNGKey(0)
-        self.mcmc = run_mcmc(model, self.data, rng_key, num_warmup=num_warmup, num_samples=num_samples)
+        self.mcmc = run_mcmc(
+            model, self.data, rng_key, num_warmup=num_warmup, num_samples=num_samples
+        )
 
     def plot_lightcurve_fits(self):
         plot_lightcurve_fits(self.mcmc.get_samples(), self.data)
 
-    
     def _wavelength_to_color(self, wavelengths):
         """
         Map wavelengths to colors using a perceptual colormap.
@@ -75,9 +81,7 @@ class EchoFit:
 
         n = len(bands_sorted)
 
-        fig, axes = plt.subplots(
-            n, 1, figsize=(8, 2.5 * n), sharex=True
-        )
+        fig, axes = plt.subplots(n, 1, figsize=(8, 2.5 * n), sharex=True)
 
         if n == 1:
             axes = [axes]
