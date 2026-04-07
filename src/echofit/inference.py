@@ -1,143 +1,162 @@
-import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS
+from jax.scipy.linalg import cho_factor, cho_solve
 
-from .echo_cache import EchoCache
-from .fourier_cache import build_fourier_matrices
-from .model import evaluate_echo_model
-from .config import frequencies
+from .forward_model import lag_scaling, build_response_function
 
 
-# =========================================================
-# BUILD STATIC DESIGN MATRICES (OUTSIDE NUMPYRO MODEL)
-# =========================================================
-def model(time_dict, flux_dict, sigma_dict, wavelengths):
+# ----------------------------
+# DRW covariance
+# ----------------------------
+def drw_covariance(t, sigma, tau):
+    dt = jnp.abs(t[:, None] - t[None, :])
+    return sigma**2 * jnp.exp(-dt / (tau + 1e-8))
 
-    t_min = min([t.min() for t in time_dict.values()])
-    t_max = max([t.max() for t in time_dict.values()])
 
-    t_model = jnp.linspace(t_min, t_max, 2000)
+# ----------------------------
+# NUMPYRO MODEL
+# ----------------------------
+def model(data):
+    bands = data["bands"]
+    tau_grid = data["tau_grid"]
+    M_BH = data["M_BH"]
 
-    # Fourier design matrix (FIXED)
-    X_sin, X_cos = build_fourier_matrices(t_model, frequencies)
+    # -------------------------
+    # DRW hyperparameters
+    # -------------------------
+    log_sigma = numpyro.sample("log_sigma", dist.Normal(0.0, 1.0))
+    log_tau_drw = numpyro.sample("log_tau_drw", dist.Normal(2.0, 1.0))
 
-    # Echo kernel cache (FIXED)
-    cache = EchoCache(t_model, wavelengths)
+    sigma = jnp.exp(log_sigma)
+    tau_drw = jnp.exp(log_tau_drw)
 
-    # =========================================================
-    # NUMPYRO MODEL
-    # =========================================================
-    def _model():
+    # -------------------------
+    # Disk parameters
+    # -------------------------
+    log_mdot = numpyro.sample("log_mdot", dist.Normal(0.0, 1.0))
+    inclination = numpyro.sample("inclination", dist.Uniform(0.0, jnp.pi / 2))
 
-        # -------------------------------
-        # 1. DISK PARAMETERS
-        # -------------------------------
-        M_BH = numpyro.sample("M_BH", dist.LogUniform(5, 10))
-        acc_rate = numpyro.sample("acc_rate", dist.LogUniform(0.01, 1.0))
-        incl = numpyro.sample("incl", dist.Uniform(0, 90))
+    # -------------------------
+    # Per-band parameters
+    # -------------------------
+    S_list, C_list = [], []
 
-        params = (M_BH, acc_rate, incl)
+    for b in range(len(bands)):
+        S_list.append(numpyro.sample(f"S_{b}", dist.Normal(0.0, 1.0)))
+        C_list.append(numpyro.sample(f"C_{b}", dist.Normal(0.0, 1.0)))
 
-        # =========================================================
-        # 2. FOURIER RANDOM WALK PRIOR
-        # =========================================================
-        K = len(frequencies)
+    # -------------------------
+    # Build observation vectors
+    # -------------------------
+    all_t = jnp.concatenate([b["t"] for b in bands])
+    y = jnp.concatenate([b["y"] for b in bands])
+    noise = jnp.concatenate([b["yerr"] for b in bands])
 
-        sigma_rw = numpyro.sample("sigma_rw", dist.LogNormal(0.0, 1.0))
+    N = len(all_t)
 
-        a0 = numpyro.sample("a0", dist.Normal(0.0, 1.0))
-        b0 = numpyro.sample("b0", dist.Normal(0.0, 1.0))
+    # -------------------------
+    # Base DRW covariance
+    # -------------------------
+    K_drw = drw_covariance(all_t, sigma, tau_drw)
 
-        da = numpyro.sample("da", dist.Normal(0.0, sigma_rw).expand([K - 1]))
-        db = numpyro.sample("db", dist.Normal(0.0, sigma_rw).expand([K - 1]))
+    # -------------------------
+    # Build response functions (NORMALISED)
+    # -------------------------
+    psi_list = []
 
-        a = jnp.concatenate([jnp.array([a0]), a0 + jnp.cumsum(da)])
-        b = jnp.concatenate([jnp.array([b0]), b0 + jnp.cumsum(db)])
-
-        # =========================================================
-        # 3. FOURIER RECONSTRUCTION
-        # =========================================================
-        sin_part = jnp.sum(X_sin * a, axis=1)
-        cos_part = jnp.sum(X_cos * b, axis=1)
-
-        xray_model = sin_part + cos_part
-
-        # =========================================================
-        # 4. X-RAY LIKELIHOOD (OPTIONAL)
-        # =========================================================
-        if "xray" in time_dict:
-
-            xray_interp = jnp.interp(
-                time_dict["xray"],
-                t_model,
-                xray_model
-            )
-
-            numpyro.sample(
-                "obs_xray",
-                dist.Normal(xray_interp, sigma_dict["xray"]),
-                obs=flux_dict["xray"]
-            )
-
-        # =========================================================
-        # 5. ECHO MODEL
-        # =========================================================
-        model_dict = evaluate_echo_model(
-            cache,
-            xray_model,
-            params
+    for b, band in enumerate(bands):
+        psi = build_response_function(
+            tau_grid,
+            log_mdot,
+            band["wavelength"],
+            inclination,
+            M_BH,
         )
 
-        # =========================================================
-        # 6. LIKELIHOOD
-        # =========================================================
-        for band in flux_dict.keys():
+        # 🔥 CRITICAL FIX: normalise response function
+        psi = psi / (jnp.sum(psi) + 1e-8)
 
-            if band == "xray":
-                continue
+        psi_list.append(psi)
 
-            A = numpyro.sample(f"A_{band}", dist.Normal(1.0, 1.0))
-            C = numpyro.sample(f"C_{band}", dist.Normal(0.0, 1.0))
+    # -------------------------
+    # Construct covariance
+    # -------------------------
+    K = jnp.zeros((N, N))
 
-            model_interp = jnp.interp(
-                time_dict[band],
-                t_model,
-                model_dict[band]
+    idx_i = 0
+
+    for b1, band1 in enumerate(bands):
+        n1 = len(band1["t"])
+        idx_j = 0
+
+        for b2, band2 in enumerate(bands):
+            n2 = len(band2["t"])
+
+            # interaction strength between bands
+            kernel_scale = jnp.sqrt(
+                jnp.sum(psi_list[b1]) *
+                jnp.sum(psi_list[b2])
             )
 
-            numpyro.sample(
-                f"obs_{band}",
-                dist.Normal(A * model_interp + C, sigma_dict[band]),
-                obs=flux_dict[band]
-            )
+            block = kernel_scale * K_drw[
+                idx_i: idx_i + n1,
+                idx_j: idx_j + n2,
+            ]
 
-    return _model
+            K = K.at[
+                idx_i: idx_i + n1,
+                idx_j: idx_j + n2,
+            ].set(block)
+
+            idx_j += n2
+
+        idx_i += n1
+
+    # -------------------------
+    # Mean model (ONLY offsets)
+    # -------------------------
+    mean = jnp.concatenate([
+        C_list[i] * jnp.ones(len(b["t"]))
+        for i, b in enumerate(bands)
+    ])
+
+    # -------------------------
+    # Stabilisation
+    # -------------------------
+    K = K + jnp.diag(noise**2 + 1e-6)
+
+    # -------------------------
+    # GP likelihood
+    # -------------------------
+    L, lower = cho_factor(K, lower=True)
+    alpha = cho_solve((L, lower), y - mean)
+
+    logdet = 2.0 * jnp.sum(jnp.log(jnp.diag(L)))
+
+    loglike = -0.5 * (
+        jnp.dot((y - mean), alpha)
+        + logdet
+        + N * jnp.log(2 * jnp.pi)
+    )
+
+    numpyro.factor("gp_loglike", loglike)
 
 
-# =========================================================
-# INFERENCE WRAPPER
-# =========================================================
-def run_inference(
-    time_dict,
-    flux_dict,
-    sigma_dict,
-    wavelengths,
-    num_warmup=500,
-    num_samples=1000
-):
+# ----------------------------
+# MCMC runner
+# ----------------------------
+def run_mcmc(model_fn, data, rng_key, num_warmup=500, num_samples=1000):
+    kernel = NUTS(model_fn)
 
-    rng_key = jax.random.PRNGKey(0)
+    mcmc = MCMC(
+        kernel,
+        num_warmup=num_warmup,
+        num_samples=num_samples,
+        num_chains=1,
+        progress_bar=True,
+    )
 
-    kernel = NUTS(model(time_dict, flux_dict, sigma_dict, wavelengths))
-
-    mcmc = MCMC(kernel, num_warmup=num_warmup, num_samples=num_samples)
-
-    mcmc.run(rng_key)
-
+    mcmc.run(rng_key, data=data)
     return mcmc
-
-
-def get_samples(mcmc):
-    return mcmc.get_samples()

@@ -1,299 +1,112 @@
-from functools import cached_property
-
+import jax
+import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
-import arviz as az
-
-from .inference import run_inference, get_samples
-from .model import evaluate_echo_model
-from .postprocess import to_arviz
-from .config import frequencies
+from .plotting import plot_mcmc_diagnostics
+from .inference import run_mcmc, model
+from .plotting import plot_lightcurve_fits
 
 
 class EchoFit:
+    def __init__(self, M_BH):
+        self.M_BH = M_BH
+        self.bands = []
 
-    def __init__(
-        self, time_dict=None, flux_dict=None, sigma_dict=None, wavelengths=None
-    ):
-        self.time_dict = time_dict or {}
-        self.flux_dict = flux_dict or {}
-        self.sigma_dict = sigma_dict or {}
-        self.wavelengths = wavelengths or {}
-
-        self.mcmc = None
-        self.samples = None
-        self.idata = None
-
-    # ----------------------
-    # MODEL GRID (single source of truth)
-    # ----------------------
-    @cached_property
-    def t_model(self):
-
-        all_times = np.concatenate(list(self.time_dict.values()))
-
-        t_min = np.min(all_times)
-        t_max = np.max(all_times)
-
-        pad = 0.05 * (t_max - t_min)
-
-        return np.linspace(t_min - pad, t_max + pad, 2000)
-
-    # ----------------------
-    # VALIDATION
-    # ----------------------
-    def _validate(self):
-
-        if len(self.flux_dict) == 0:
-            raise ValueError("No data loaded.")
-
-        if "xray" not in self.flux_dict:
-            raise ValueError("X-ray driving light curve is required.")
-
-        keys = self.flux_dict.keys()
-
-        for k in keys:
-            if k not in self.time_dict:
-                raise ValueError(f"Missing time array for band: {k}")
-            if k not in self.sigma_dict:
-                raise ValueError(f"Missing sigma for band: {k}")
-
-    # ----------------------
-    # DATA LOADING
-    # ----------------------
-    def add_lightcurve(self, name, time, flux, sigma, wavelength=None):
-
-        self.time_dict[name] = time
-        self.flux_dict[name] = flux
-        self.sigma_dict[name] = sigma
-
-        if name != "xray":
-            if wavelength is None:
-                raise ValueError(f"Wavelength required for {name}")
-            self.wavelengths[name] = wavelength
-
-    def load_npz(self, path):
-
-        data = np.load(path, allow_pickle=True)
-
-        for key in data:
-
-            if key.startswith("time_"):
-                band = key.replace("time_", "")
-                self.time_dict[band] = data[key]
-
-            elif key.startswith("flux_"):
-                band = key.replace("flux_", "")
-                self.flux_dict[band] = data[key]
-
-            elif key.startswith("sigma_"):
-                band = key.replace("sigma_", "")
-                self.sigma_dict[band] = data[key]
-
-    def load_csv(self, name, path, wavelength=None):
-
-        data = np.genfromtxt(path, delimiter=",", names=True)
-
-        self.add_lightcurve(
-            name,
-            data["time"],
-            data["flux"],
-            data["sigma"],
-            wavelength=wavelength,
+    def add_lightcurve(self, t, y, yerr, wavelength):
+        self.bands.append(
+            dict(t=jnp.array(t), y=jnp.array(y), yerr=jnp.array(yerr), wavelength=wavelength)
         )
 
-    # ----------------------
-    # INFERENCE
-    # ----------------------
-    def run_mcmc(self):
+    def build_grid(self):
+        all_t = jnp.concatenate([b["t"] for b in self.bands])
+        tmin, tmax = all_t.min(), all_t.max()
 
-        self._validate()
+        grid_t = jnp.linspace(tmin, tmax, 500)
 
-        self.mcmc = run_inference(
-            self.time_dict,
-            self.flux_dict,
-            self.sigma_dict,
-            self.wavelengths,
+        # simple synthetic driver (fixed)
+        driver = jnp.sin(grid_t / 10.0)
+
+        tau_grid = jnp.linspace(0, 50, 200)
+
+        self.data = dict(
+            grid_t=grid_t,
+            driver=driver,
+            tau_grid=tau_grid,
+            bands=self.bands,
+            M_BH=self.M_BH,
         )
 
-        self.samples = get_samples(self.mcmc)
-        self.idata = to_arviz(self.mcmc)
+    def fit(self, num_warmup=500, num_samples=1000):
+        self.build_grid()
+        rng_key = jax.random.PRNGKey(0)
+        self.mcmc = run_mcmc(model, self.data, rng_key, num_warmup=num_warmup, num_samples=num_samples)
 
-    # ----------------------
-    # DIAGNOSTICS
-    # ----------------------
-    def plot_trace(self):
-        az.plot_trace(self.idata)
-        plt.show()
+    def plot_lightcurve_fits(self):
+        plot_lightcurve_fits(self.mcmc.get_samples(), self.data)
 
-    def summary(self):
-        return az.summary(self.idata)
-
-    def plot_posteriors(self):
-        az.plot_posterior(self.idata)
-        plt.show()
-
-    # ----------------------
-    # POSTERIOR PREDICTIVE
-    # ----------------------
-    def posterior_predictive(self, n_draws=100):
-
-        n = len(self.samples["M_BH"])
-        n_draws = min(n_draws, n)
-
-        idx = np.random.choice(n, n_draws, replace=False)
-
-        models = {band: [] for band in self.flux_dict}
-
-        for i in idx:
-
-            params = (
-                self.samples["M_BH"][i],
-                self.samples["acc_rate"][i],
-                self.samples["incl"][i],
-            )
-
-            model_dict, _ = evaluate_echo_model(
-                self.t_model,
-                self.time_dict,
-                self.flux_dict,
-                self.sigma_dict,
-                self.wavelengths,
-                params,
-                frequencies,
-            )
-
-            for band in models:
-                models[band].append(model_dict[band])
-
-        for band in models:
-            models[band] = np.array(models[band])
-
-        return models
-
-    # ----------------------
-    # PLOTTING
-    # ----------------------
-    def _band_color(self, band):
-
-        if band == "xray":
-            return "black"
-
-        # wavelength-based coloring (simple heuristic)
-        wl = self.wavelengths.get(band, None)
-
-        if wl is None:
-            return "gray"
-
-        # UV range
-        if wl <= 2000:
-            return "purple"
-
-        # optical range
-        if wl <= 8000:
-            return "tab:orange"
-
-        return "tab:red"
-
-    def plot_raw_lightcurve_data(
-        self, normalize=False, errorbars=True, title="Observed light curves"
-    ):
+    
+    def _wavelength_to_color(self, wavelengths):
         """
-        Plot all loaded light curves before inference.
+        Map wavelengths to colors using a perceptual colormap.
+        Short λ → blue, long λ → red.
+        """
+        wavelengths = np.array(wavelengths)
+
+        # normalize to [0, 1]
+        wmin, wmax = wavelengths.min(), wavelengths.max()
+        norm = (wavelengths - wmin) / (wmax - wmin + 1e-8)
+
+        cmap = plt.get_cmap("turbo")  # nice blue→red gradient
+        return cmap(norm)
+
+    def plot_raw_lightcurve_data(self):
+        """
+        Plot raw light curves in stacked panels ordered by wavelength.
         """
 
-        if self.time_dict is None or self.flux_dict is None:
-            raise ValueError("No data loaded. Use load_csv() first.")
+        if len(self.bands) == 0:
+            raise ValueError("No light curves added.")
 
-        # -------------------------------------------------
-        # sort bands by wavelength (low → high)
-        # -------------------------------------------------
-        bands = list(self.time_dict.keys())
+        # sort bands by wavelength
+        bands_sorted = sorted(self.bands, key=lambda b: b["wavelength"])
+        wavelengths = [b["wavelength"] for b in bands_sorted]
 
-        def wl_key(b):
-            # xray gets highest priority (top panel or bottom depending preference)
-            if b == "xray":
-                return -1
-            return self.wavelengths.get(b, 0)
+        colors = self._wavelength_to_color(wavelengths)
 
-        bands = sorted(bands, key=wl_key, reverse=False)
+        n = len(bands_sorted)
 
-        # -------------------------------------------------
-        # create stacked panels
-        # -------------------------------------------------
         fig, axes = plt.subplots(
-            len(bands), 1, figsize=(10, 2.5 * len(bands)), sharex=True
+            n, 1, figsize=(8, 2.5 * n), sharex=True
         )
 
-        if len(bands) == 1:
+        if n == 1:
             axes = [axes]
 
-        for ax, band in zip(axes, bands):
+        for i, (band, color) in enumerate(zip(bands_sorted, colors)):
+            ax = axes[i]
 
-            t = self.time_dict[band]
-            f = self.flux_dict[band]
-            color = self._band_color(band)
+            ax.errorbar(
+                band["t"],
+                band["y"],
+                yerr=band["yerr"],
+                fmt="o",
+                color=color,
+                ecolor=color,
+                alpha=0.9,
+                markersize=4,
+                capsize=2,
+            )
 
-            if normalize:
-                f = (f - f.mean()) / f.std()
+            ax.set_ylabel("Flux")
+            ax.set_title(f"λ = {band['wavelength']:.0f}", loc="left")
 
-            if errorbars and band in self.sigma_dict:
-                ax.errorbar(
-                    t,
-                    f,
-                    yerr=self.sigma_dict[band],
-                    fmt="o",
-                    color=color,
-                    ecolor=color,
-                    alpha=0.6,
-                )
-            else:
-                ax.scatter(t, f, s=10)
-
-            label = band
-            if band in self.wavelengths:
-                label += f" ({self.wavelengths[band]} Å)"
-
-            ax.set_ylabel(label)
+            # cleaner look
             ax.grid(alpha=0.2)
 
         axes[-1].set_xlabel("Time")
 
-        plt.suptitle(title)
         plt.tight_layout()
         plt.show()
 
-    def plot_lightcurves(self, n_draws=200):
-
-        models = self.posterior_predictive(n_draws)
-
-        for band in self.flux_dict:
-
-            median = np.median(models[band], axis=0)
-            lo = np.percentile(models[band], 16, axis=0)
-            hi = np.percentile(models[band], 84, axis=0)
-
-            plt.figure()
-
-            plt.errorbar(
-                self.time_dict[band],
-                self.flux_dict[band],
-                yerr=self.sigma_dict[band],
-                fmt=".",
-                label="data",
-            )
-
-            # IMPORTANT FIX: align model to data grid
-            t_data = self.time_dict[band]
-            median_i = np.interp(t_data, self.t_model, median)
-            lo_i = np.interp(t_data, self.t_model, lo)
-            hi_i = np.interp(t_data, self.t_model, hi)
-
-            plt.plot(t_data, median_i, label="model")
-            plt.fill_between(t_data, lo_i, hi_i, alpha=0.3)
-
-            plt.title(band)
-            plt.xlabel("Time")
-            plt.ylabel("Flux")
-            plt.legend()
-            plt.show()
+    def plot_mcmc_diagnostics(self):
+        plot_mcmc_diagnostics(self.mcmc)
