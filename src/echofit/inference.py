@@ -1,9 +1,16 @@
 import numpyro
 import numpyro.distributions as dist
 import jax.numpy as jnp
+import jax
+
 from numpyro.infer import MCMC, NUTS
 from .model import evaluate_echo_model_matrix
-import jax
+from .marginal_woodbury import compute_posterior_beta
+
+
+# =========================================================
+# NUMPYRO MODEL (STABLE VERSION)
+# =========================================================
 
 def model(
     X,
@@ -17,7 +24,7 @@ def model(
 ):
 
     # ---------------------------------------
-    # PARAMETERS
+    # PHYSICAL PARAMETERS ONLY
     # ---------------------------------------
     M_BH = numpyro.sample("M_BH", dist.LogNormal(1.0, 0.5))
     acc_rate = numpyro.sample("acc_rate", dist.LogNormal(-1.0, 0.5))
@@ -46,36 +53,33 @@ def model(
     A = jnp.concatenate(A_blocks, axis=0)
 
     # ---------------------------------------
-    # LATENT β (THIS IS THE KEY FIX)
+    # PRIOR (SMOOTHNESS)
     # ---------------------------------------
-
     K = A.shape[1]
-
     D = jnp.eye(K) - jnp.eye(K, k=-1)
     D = D[1:]
 
     Q = (D.T @ D) / (sigma_rw ** 2) + 1e-6 * jnp.eye(K)
 
-    beta = numpyro.sample(
-        "beta",
-        dist.MultivariateNormal(
-            loc=jnp.zeros(K),
-            covariance_matrix=jnp.linalg.inv(Q)
-        )
-    )
+    # ---------------------------------------
+    # ANALYTIC β (NO SAMPLING)
+    # ---------------------------------------
+    Sigma = jnp.diag(sigma_data ** 2)
+
+    beta_mean, _ = compute_posterior_beta(A, y_data, Sigma, Q)
 
     # ---------------------------------------
-    # FORWARD MODEL
+    # PREDICTION
     # ---------------------------------------
-    y_base = A @ beta
+    y_base = A @ beta_mean
 
     y_out = []
     offset = 0
 
     for i, b in enumerate(bands):
         n = band_sizes[b]
-        y_b = y_base[offset:offset + n]
 
+        y_b = y_base[offset:offset + n]
         y_b = C[i] + S[i] * y_b
 
         y_out.append(y_b)
@@ -93,6 +97,9 @@ def model(
     )
 
 
+# =========================================================
+# RUN INFERENCE
+# =========================================================
 
 def run_inference(
     X,
@@ -106,7 +113,6 @@ def run_inference(
     num_warmup,
     num_samples,
 ):
-    
 
     kernel = NUTS(model)
 
@@ -117,7 +123,6 @@ def run_inference(
     )
 
     rng_key = jax.random.PRNGKey(0)
-
 
     mcmc.run(
         rng_key,
