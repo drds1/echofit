@@ -5,12 +5,22 @@ import matplotlib.pyplot as plt
 from .plotting import plot_mcmc_diagnostics
 from .inference import run_mcmc, model
 from .plotting import plot_lightcurve_fits
+from .plotting import plot_diagnostics_extended
+import pandas as pd
 
 
 class EchoFit:
-    def __init__(self, M_BH):
+    def __init__(self, M_BH, config=None):
+
         self.M_BH = M_BH
         self.bands = []
+
+        default_config = dict(
+            dt=0.2,
+            tau_max=50.0,
+        )
+
+        self.config = {**default_config, **(config or {})}
 
     def add_lightcurve(self, t, y, yerr, wavelength):
         self.bands.append(
@@ -22,16 +32,31 @@ class EchoFit:
             )
         )
 
+    def add_lightcurve_csv(self, filepath, wavelength):
+        """
+        Load a single light curve from CSV.
+
+        Expected format:
+            time, flux, sigma
+        """
+
+        data = pd.read_csv(filepath)
+        t = data["time"].values
+        y = data["flux"].values
+        yerr = data["sigma"].values
+        self.add_lightcurve(t, y, yerr, wavelength)
+
     def build_grid(self):
         all_t = jnp.concatenate([b["t"] for b in self.bands])
         tmin, tmax = all_t.min(), all_t.max()
+        tau_max = self.config["tau_max"]
+        dt = self.config["dt"]
 
-        grid_t = jnp.linspace(tmin, tmax, 500)
+        grid_t = jnp.arange(tmin - tau_max, tmax + dt, dt)
 
-        # simple synthetic driver (fixed)
-        driver = jnp.sin(grid_t / 10.0)
+        driver = None
 
-        tau_grid = jnp.linspace(0, 50, 200)
+        tau_grid = jnp.arange(0, tau_max + dt, dt)
 
         self.data = dict(
             grid_t=grid_t,
@@ -41,15 +66,27 @@ class EchoFit:
             M_BH=self.M_BH,
         )
 
-    def fit(self, num_warmup=500, num_samples=1000):
+    def fit(self, num_warmup=500, num_samples=1000, fixed_params=None):
         self.build_grid()
         rng_key = jax.random.PRNGKey(0)
+
+        self.fixed_params = fixed_params if fixed_params is not None else {}
+
         self.mcmc = run_mcmc(
-            model, self.data, rng_key, num_warmup=num_warmup, num_samples=num_samples
+            model,
+            self.data,
+            rng_key,
+            num_warmup=num_warmup,
+            num_samples=num_samples,
+            fixed_params=fixed_params,
         )
 
     def plot_lightcurve_fits(self):
-        plot_lightcurve_fits(self.mcmc.get_samples(), self.data)
+        plot_lightcurve_fits(
+            self.mcmc.get_samples(),
+            self.data,
+            fixed_params=getattr(self, "fixed_params", None),
+        )
 
     def _wavelength_to_color(self, wavelengths):
         """
@@ -114,3 +151,6 @@ class EchoFit:
 
     def plot_mcmc_diagnostics(self):
         plot_mcmc_diagnostics(self.mcmc)
+
+    def plot_extended_diagnostics(self):
+        plot_diagnostics_extended(self.mcmc, self.data)

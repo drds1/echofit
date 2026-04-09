@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
+from numpyro.handlers import condition
 from numpyro.infer import MCMC, NUTS
 from jax.scipy.linalg import cho_factor, cho_solve
 
@@ -44,8 +45,8 @@ def model(data):
     S_list, C_list = [], []
 
     for b in range(len(bands)):
-        S_list.append(numpyro.sample(f"S_{b}", dist.Normal(0.0, 1.0)))
-        C_list.append(numpyro.sample(f"C_{b}", dist.Normal(0.0, 1.0)))
+        S_list.append(numpyro.sample(f"S_{b}", dist.Normal(0.0, 5.0)))
+        C_list.append(numpyro.sample(f"C_{b}", dist.Normal(0.0, 5.0)))
 
     # -------------------------
     # Build observation vectors
@@ -136,13 +137,19 @@ def model(data):
 
     loglike = -0.5 * (jnp.dot((y - mean), alpha) + logdet + N * jnp.log(2 * jnp.pi))
 
+    numpyro.deterministic("loglike", loglike)
     numpyro.factor("gp_loglike", loglike)
 
 
 # ----------------------------
 # MCMC runner
 # ----------------------------
-def run_mcmc(model_fn, data, rng_key, num_warmup=500, num_samples=1000):
+def run_mcmc(
+    model_fn, data, rng_key, num_warmup=500, num_samples=1000, fixed_params=None
+):
+    if fixed_params is not None:
+        model_fn = condition(model_fn, data=fixed_params)
+
     kernel = NUTS(model_fn)
 
     mcmc = MCMC(

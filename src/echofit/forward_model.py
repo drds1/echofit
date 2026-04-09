@@ -58,7 +58,8 @@ def compute_echo(driver, tau_grid, log_mdot, wavelength, inclination, M_BH):
         M_BH,
     )
 
-    conv = fftconvolve(driver, psi, mode="full")
+    dtau = tau_grid[1] - tau_grid[0]
+    conv = fftconvolve(driver, psi, mode="full") * dtau
     return conv[: driver.shape[0]]
 
 
