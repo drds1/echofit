@@ -39,6 +39,8 @@ def plot_triangle(samples, fixed_params=None):
     for name in param_names:
         try:
             vals = resolver(name)
+            if np.std(vals) == 0:
+                continue
             chains.append(vals)
             labels.append(name)
         except KeyError:

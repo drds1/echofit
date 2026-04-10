@@ -126,7 +126,10 @@ for band, p in bands.items():
 # ============================================================
 
 for band in flux_dict:
-    data = np.column_stack([time, flux_dict[band], sigma_dict[band]])
+    fb = flux_dict[band]
+    if band == 'uv':
+        fb += 1.5  # add small offset to test C parameter recovery
+    data = np.column_stack([time, fb, sigma_dict[band]])
 
     header = "time,flux,sigma"
     filename = f"data/{band}.csv"
