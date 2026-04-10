@@ -39,6 +39,7 @@ Depending on configuration, the model may include:
 
 # Project Structure
 
+```
 echofit/
 ├── src/echofit/
 │   ├── echofit.py              # main model class
@@ -51,7 +52,7 @@ echofit/
 │
 ├── pyproject.toml
 └── README.md
-
+```
 ---
 
 # Installation
