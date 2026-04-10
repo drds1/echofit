@@ -1,351 +1,198 @@
 # EchoFit
 
-**EchoFit** is a lightweight framework for modelling multi-band reverberation mapping data using a physically motivated response function and a stochastic driving light curve model.
+EchoFit is a Bayesian inference framework for modeling reverberation mapping / echo tomography light curves using a damped random walk (DRW) driving process and parameterized response functions.
 
-The package is designed to infer:
-
-* Accretion disc response function parameters
-* Time delays between bands
-* A latent stochastic driving process (Damped Random Walk; DRW)
-
----
-
-# 🚀 Features
-
-* Multi-band light curve fitting
-* Physically motivated response functions
-* DRW (Gaussian Process) latent driver model
-* MCMC inference (NumPyro / HMC)
-* Flexible parameter fixing for controlled experiments
-* Diagnostic plotting:
-
-  * Light curve fits
-  * Response functions
-  * MCMC traces
-  * Cost function evolution
-  * Power spectrum
-  * Triangle (corner) plots
+The model jointly infers:
+- The latent driving light curve (as a Gaussian Process / DRW)
+- Time-delay response functions for multiple wavelength bands
+- Scaling and offset parameters per band
+- Physical parameters such as mass accretion rate and geometry-dependent quantities
 
 ---
 
-# 📦 Installation
+# Model Overview
 
-Clone the repository:
+EchoFit assumes:
 
-```bash
-git clone https://github.com/yourusername/echofit.git
-cd echofit
-```
+## 1. Driving process
+The latent driver is modeled as a DRW (Ornstein–Uhlenbeck process), parameterized by:
+- `log_tau_drw` → variability timescale
+- `log_sigma` → amplitude of stochastic variability
+
+## 2. Response model
+Each photometric band is generated via convolution:
+
+F_band(t) = S * (ψ(τ) * F_driver) + C
+
+Where:
+- ψ(τ) is the response function
+- S is a scaling parameter
+- C is a constant offset
+
+## 3. Physical parameters
+Depending on configuration, the model may include:
+- `log_mdot` (mass accretion rate proxy)
+- `inclination`
+- response shape parameters (e.g. wavelength-dependent lag structure)
+
+---
+
+# Project Structure
+
+echofit/
+├── src/echofit/
+│   ├── echofit.py              # main model class
+│   ├── plotting.py             # diagnostics + visualization
+│   ├── forward_model.py        # convolution + response functions
+│   └── inference.py            # inference engine
+│
+├── data/
+│   ├── generate_synthetic.py   # synthetic DRW + echo data generator
+│
+├── pyproject.toml
+└── README.md
+
+---
+
+# Installation
+
+This project uses Poetry.
 
 Install dependencies:
 
-```bash
-pip install -r requirements.txt
-```
+poetry install
 
-You may also need:
+Activate environment:
 
-```bash
-pip install numpy jax jaxlib matplotlib corner numpyro
-```
+poetry shell
 
 ---
 
-# 📊 Data Format
+# Generating synthetic data
 
-EchoFit expects light curves in CSV format:
+Synthetic datasets are generated using a DRW driver and convolution-based echo model.
 
-```
-time,flux,sigma
-```
+Run:
 
-Example:
+poetry run python ./data/generate_synthetic.py
 
-```
-0.0, 1.23, 0.05
-0.2, 1.10, 0.05
-...
-```
+This will output CSV files:
 
-Each band is loaded separately.
+data/xray.csv
+data/uv.csv
+data/optical.csv
 
----
+Each file contains:
 
-# 🧪 Generating Synthetic Data
-
-You can generate test data using:
-
-```bash
-python generate_synthetic.py
-```
-
-This creates:
-
-* A DRW driving light curve
-* Multiple echo light curves via convolution with response functions
-* Realistic noise
-
-Output files are saved in:
-
-```
-data/
-```
+time, flux, sigma
 
 ---
 
-# ⚙️ Basic Usage
+# Running inference
 
-```python
-from echofit import EchoFit
+Typical workflow:
 
-fit = EchoFit()
+from echofit.echofit import EchoFit
 
-fit.add_lightcurve_csv("data/xray.csv", wavelength=1.0)
-fit.add_lightcurve_csv("data/uv.csv", wavelength=2000.0)
-fit.add_lightcurve_csv("data/optical.csv", wavelength=5000.0)
+fit = EchoFit(config)
+fit.add_lightcurve_csv("data/xray.csv", band="xray")
+fit.add_lightcurve_csv("data/uv.csv", band="uv")
+fit.add_lightcurve_csv("data/optical.csv", band="optical")
 
-fit.build_grid()
-
-fit.fit(
-    num_warmup=500,
-    num_samples=1000,
-)
-```
+fit.build_model()
+fit.fit(num_warmup=200, num_samples=1000)
 
 ---
 
-# 🔒 Fixing Parameters
+# Visualisation
 
-You can fix parameters during inference:
+Light curve + response function fits:
 
-```python
-fit.fit(
-    num_warmup=500,
-    num_samples=1000,
-    fixed_params={
-        "inclination": 0.0,
-        "log_sigma": 0.0,
-    },
-)
-```
-
-This removes them from sampling while still using them in the model.
-
----
-
-# 📈 Plotting
-
-## Light curve fits
-
-```python
 fit.plot_lightcurve_fits()
-```
 
-Shows:
+MCMC diagnostics:
 
-* Reconstructed driving light curve (posterior mean)
-* Echo light curves
-* Response functions
-
----
-
-## MCMC diagnostics
-
-```python
-fit.plot_mcmc_diagnostics()
-```
-
-Trace plots for all parameters.
-
----
-
-## Extended diagnostics
-
-```python
 fit.plot_extended_diagnostics()
-```
+fit.plot_mcmc_diagnostics()
 
-Includes:
+Triangle / posterior structure plot:
 
-* Cost function vs iteration
-* Driver power spectrum
-* DRW timescale marker
-
----
-
-## Triangle plot
-
-```python
 fit.plot_triangle()
-```
-
-Shows:
-
-* Posterior distributions
-* Parameter degeneracies
-* Confidence intervals
 
 ---
 
-# 🧠 Model Overview
+# Key Diagnostics
 
-## Driving Light Curve
+EchoFit includes built-in checks for:
 
-The latent driver is modeled as a **Damped Random Walk (DRW)**:
+## MCMC behaviour
+- Trace plots of all parameters
+- Log-likelihood convergence
+- Mixing diagnostics
 
-* Parameters:
-
-  * `log_tau_drw` — characteristic timescale
-  * `log_sigma` — variability amplitude
-
-This defines a Gaussian Process prior over all possible driving light curves.
-
----
-
-## Response Function
-
-Each band has a response function:
-
-```
-ψ(τ; log_mdot, wavelength, inclination, M_BH)
-```
-
-This describes how the disc reprocesses the driving signal.
+## Model validation
+- Echo reconstruction vs observed light curves
+- Response function uncertainty bands
+- Power spectrum of inferred driver
+- DRW timescale comparison
 
 ---
 
-## Observed Light Curves
+# Important Notes
 
-Each band is modeled as:
+## 1. Driver is latent
+The driving light curve is not directly observed. It is inferred via a DRW Gaussian Process conditioned on all observed bands.
 
-```
-y(t) = S * (driver ⊗ ψ)(t) + C + noise
-```
+## 2. Fixed parameters
+Parameters can be held fixed during inference:
 
-Where:
+fit.fit(num_warmup=100, num_samples=500, fixed_params={
+    "inclination": 0.0,
+    "log_sigma": 0.0
+})
 
-* `S` = scaling
-* `C` = offset
-* `⊗` = convolution
-
----
-
-# ⚠️ Important Notes
-
-## 1. The driver is NOT directly sampled
-
-The model does **not** explicitly sample the driving light curve.
-
-Instead:
-
-* It marginalizes over all possible DRW realizations
-* The likelihood is computed analytically via covariance matrices
-
----
-
-## 2. Driver reconstruction is approximate
-
-When plotting, the driver is reconstructed as:
-
-* Posterior mean of the GP
-* Conditioned on observed data
-
-This is:
-
-* Useful for visualization
-* Not a unique solution
-
----
+Fixed parameters:
+- are excluded from sampling
+- are treated as constants in forward model evaluation
 
 ## 3. Degeneracies
-
-Common degeneracies include:
-
-* `S` vs driver amplitude
-* `C` vs long-timescale driver trends
-* Response width vs DRW timescale
-
-Fixing parameters can help:
-
-```python
-fixed_params = {
-    "log_sigma": 0.0
-}
-```
+Some parameters (especially S, C, and driver amplitude) may exhibit degeneracies depending on normalization choices.
 
 ---
 
-# 🔍 Convergence Tips
+# Model assumptions
 
-Typical good settings:
-
-```python
-num_warmup = 1000
-num_samples = 2000
-```
-
-Check convergence using:
-
-* Trace plots
-* Cost function stabilization
-* Triangle plots
-
-Good mixing = chains:
-
-* Move freely
-* Show no trends
-* Have stable distributions
+- Linear convolution between driver and response
+- DRW (Ornstein–Uhlenbeck) stochastic process for driver
+- Gaussian observational noise
+- Stationary response kernels per band
 
 ---
 
-# 🧪 Development Notes
+# Scientific interpretation
 
-* Grid spacing is controlled globally via:
-
-```python
-config["dt"]
-```
-
-* Recommended:
-
-```python
-dt = 0.2  # days
-```
-
-* Avoid dataset-dependent grids for consistency
+The model performs probabilistic deconvolution of multi-band light curves into:
+- a shared stochastic driving process
+- wavelength-dependent transfer functions
 
 ---
 
-# 🚧 Future Improvements
+# Future improvements
 
-* Full GP conditioning using response operator (exact reconstruction)
-* Faster linear algebra (JAX acceleration)
-* Variational inference option
-* Multi-object fitting
-* Improved response function physics
-
----
-
-# 📜 License
-
-MIT License
+- Full HMC inference (replacing current MCMC sampler)
+- Improved driver reconstruction (posterior sampling instead of mean-field estimate)
+- Flexible non-parametric response functions
+- Fourier-based driver modeling alternative
+- Hierarchical population inference
 
 ---
 
-# 🙌 Acknowledgements
+# License
 
-This project is inspired by reverberation mapping techniques in AGN physics and Gaussian Process time series modelling.
-
----
-
-# 💬 Final Note
-
-If something looks wrong in the plots, it usually is.
-
-The best debugging tools are:
-
-* Triangle plots
-* Synthetic data recovery
-* Visual inspection of response functions
+Internal research code (update as needed).
 
 ---
+
+# Author Notes
+
+Designed for reverberation mapping and time-domain inference with explicit physical interpretability and full posterior sampling of latent driving processes.
