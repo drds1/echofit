@@ -16,6 +16,7 @@ jaxlib = "^0.4"
 numpyro = "^0.13"
 matplotlib = "^3.8"
 arviz = ">=0.16,<0.18"
+corner = "^2.2.3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

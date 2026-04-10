@@ -1,9 +1,67 @@
-from arviz import data
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
 import numpy as np
 from .forward_model import compute_echo
 from .forward_model import build_response_function
+import corner
+
+
+def plot_triangle(samples, fixed_params=None):
+    """
+    Triangle (corner) plot of posterior samples.
+    Automatically handles fixed parameters.
+    """
+
+    fixed_params = fixed_params or {}
+    resolver = ParamResolver(samples, fixed_params)
+
+    # -----------------------------------
+    # Collect parameters to plot
+    # -----------------------------------
+    param_names = []
+
+    for name in samples.keys():
+        if name == "loglike":
+            continue
+        param_names.append(name)
+
+    # also include fixed params (optional)
+    for name in fixed_params:
+        if name not in param_names:
+            param_names.append(name)
+
+    # -----------------------------------
+    # Build sample matrix
+    # -----------------------------------
+    chains = []
+    labels = []
+
+    for name in param_names:
+        try:
+            vals = resolver(name)
+            chains.append(vals)
+            labels.append(name)
+        except KeyError:
+            continue
+
+    if len(chains) == 0:
+        raise ValueError("No parameters available for triangle plot.")
+
+    X = np.vstack(chains).T  # shape (n_samples, n_params)
+
+    # -----------------------------------
+    # Make corner plot
+    # -----------------------------------
+    fig = corner.corner(
+        X,
+        labels=labels,
+        show_titles=True,
+        title_fmt=".2f",
+        quantiles=[0.16, 0.5, 0.84],
+    )
+
+    plt.suptitle("Posterior Distributions (Triangle Plot)")
+    plt.show()
 
 
 class ParamResolver:
@@ -44,6 +102,7 @@ class ParamResolver:
 
         raise KeyError(f"Parameter '{name}' not found in samples or fixed_params")
 
+
 def build_convolution_matrix(grid_t, tau_grid, psi):
     """
     Build convolution matrix H such that:
@@ -65,6 +124,7 @@ def build_convolution_matrix(grid_t, tau_grid, psi):
                 H[i, j] = psi[k]
 
     return H
+
 
 def reconstruct_driver_posterior(data, resolver):
     """
@@ -346,7 +406,7 @@ def plot_mcmc_diagnostics(mcmc):
     plt.show()
 
 
-def plot_diagnostics_extended(mcmc, data):
+def plot_diagnostics_extended(mcmc, data, fixed_params=None):
     samples = mcmc.get_samples()
 
     # ----------------------------------------
@@ -378,7 +438,7 @@ def plot_diagnostics_extended(mcmc, data):
     # ----------------------------------------
     # 2. POWER SPECTRUM OF DRIVER
     # ----------------------------------------
-    resolver = ParamResolver(samples, None)
+    resolver = ParamResolver(samples, fixed_params)
     driver, _ = reconstruct_driver_posterior(data, resolver)
     grid_t = np.array(data["grid_t"])
 

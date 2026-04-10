@@ -4,8 +4,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from .plotting import plot_mcmc_diagnostics
 from .inference import run_mcmc, model
-from .plotting import plot_lightcurve_fits
-from .plotting import plot_diagnostics_extended
+from .plotting import (
+    plot_triangle,
+    plot_diagnostics_extended,
+    plot_lightcurve_fits,
+)
 import pandas as pd
 
 
@@ -153,4 +156,12 @@ class EchoFit:
         plot_mcmc_diagnostics(self.mcmc)
 
     def plot_extended_diagnostics(self):
-        plot_diagnostics_extended(self.mcmc, self.data)
+        plot_diagnostics_extended(
+            self.mcmc, self.data, fixed_params=getattr(self, "fixed_params", None)
+        )
+
+    def plot_triangle(self):
+        plot_triangle(
+            self.mcmc.get_samples(),
+            fixed_params=getattr(self, "fixed_params", None),
+        )
