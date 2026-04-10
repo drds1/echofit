@@ -1,79 +1,68 @@
-import jax
 import jax.numpy as jnp
+from jax import jit
+from jax.scipy.signal import fftconvolve
+
+LAMBDA0 = 5000.0  # reference wavelength (Å or nm — be consistent)
+MDOT0 = 1.0
+M0 = 1.0e8  # reference mass (solar masses)
+TAU0 = 10.0  # days (typical AGN lag scale)
 
 
-@jax.jit
-def forward_model(
-    a,
-    b,
-    X_sin,
-    X_cos,
-    xray_obs_time,
-    xray_obs_flux,
-    xray_sigma,
-    time_dict,
-    flux_dict,
-    sigma_dict,
-    t_model,
-    cache_dt,
-    M_BH,
-    acc_rate,
-    incl,
-    frequencies,
-    wavelengths,
-):
-    """
-    Fully deterministic model:
-    Fourier + echo + likelihood terms (no NumPyro here)
-    """
+def lag_scaling(log_mdot, wavelength, M_BH):
+    mdot = jnp.exp(log_mdot)
+    mu = (
+        TAU0
+        * ((mdot / MDOT0) * (M_BH / M0)) ** (1 / 3)
+        * (wavelength / LAMBDA0) ** (4 / 3)
+    )
+    return mu
 
-    # =========================================================
-    # 1. FOURIER DRIVER
-    # =========================================================
-    xray_model = jnp.sum(X_sin * a, axis=1) + jnp.sum(X_cos * b, axis=1)
 
-    # =========================================================
-    # 2. OPTIONAL X-RAY LIKELIHOOD
-    # =========================================================
-    def xray_ll():
-        xray_interp = jnp.interp(xray_obs_time, t_model, xray_model)
-        return -0.5 * jnp.sum(((xray_obs_flux - xray_interp) / xray_sigma) ** 2)
+def build_response_function(tau, log_mdot, wavelength, inclination, M_BH):
+    mu = lag_scaling(log_mdot, wavelength, M_BH)
 
-    # =========================================================
-    # 3. ECHO MODEL
-    # =========================================================
-    tau0 = (M_BH / 1e8) ** (1 / 3) * (acc_rate) ** (1 / 3)
-    width = 0.3 + 0.7 * jnp.sin(incl)
+    # IMPORTANT: decouple width from mu
+    sigma = TAU0 * 0.3
 
-    def band_loglike(wavelength, t_obs, flux_obs, sigma_obs):
-        tau = tau0 * (wavelength / 5000.0) ** (4 / 3)
+    skew = 0.5 * jnp.tanh(inclination)
 
-        kernel = jnp.exp(-0.5 * ((cache_dt - tau) / width) ** 2)
-        kernel = kernel / jnp.sum(kernel, axis=1, keepdims=True)
+    return response_function(tau, mu, sigma, skew)
 
-        y = kernel @ xray_model
 
-        y_interp = jnp.interp(t_obs, t_model, y)
+def response_function(tau, mu, sigma, skew):
+    # standard Gaussian core
+    z = (tau - mu) / (sigma + 1e-8)
+    gauss = jnp.exp(-0.5 * z**2)
 
-        return -0.5 * jnp.sum(((flux_obs - y_interp) / sigma_obs) ** 2)
+    # mild skew that DOES NOT affect normalization
+    skew_factor = jnp.exp(0.5 * skew * z)
 
-    # =========================================================
-    # 4. TOTAL LOG LIKELIHOOD
-    # =========================================================
-    logp = 0.0
+    psi = gauss * skew_factor
 
-    if "xray" in time_dict:
-        logp += xray_ll()
+    # enforce positivity
+    psi = jnp.clip(psi, 1e-12, None)
 
-    for band in flux_dict.keys():
-        if band == "xray":
-            continue
+    # normalize as probability density (stable form)
+    psi = psi / (jnp.sum(psi) + 1e-8)
 
-        logp += band_loglike(
-            wavelengths[band],
-            time_dict[band],
-            flux_dict[band],
-            sigma_dict[band],
-        )
+    return psi
 
-    return logp
+
+@jit
+def compute_echo(driver, tau_grid, log_mdot, wavelength, inclination, M_BH):
+    psi = build_response_function(
+        tau_grid,
+        log_mdot,
+        wavelength,
+        inclination,
+        M_BH,
+    )
+
+    dtau = tau_grid[1] - tau_grid[0]
+    conv = fftconvolve(driver, psi, mode="full") * dtau
+    return conv[: driver.shape[0]]
+
+
+def drw_covariance(t, sigma, tau):
+    dt = jnp.abs(t[:, None] - t[None, :])
+    return sigma**2 * jnp.exp(-dt / tau)
