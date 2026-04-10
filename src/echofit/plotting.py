@@ -1,3 +1,4 @@
+from arviz import data
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
 import numpy as np
@@ -43,77 +44,106 @@ class ParamResolver:
 
         raise KeyError(f"Parameter '{name}' not found in samples or fixed_params")
 
+def build_convolution_matrix(grid_t, tau_grid, psi):
+    """
+    Build convolution matrix H such that:
+    (H @ X) ≈ convolution of X with psi
+    """
+    N = len(grid_t)
+    H = np.zeros((N, N))
+
+    dt = grid_t[1] - grid_t[0]
+
+    for i in range(N):
+        for j in range(N):
+            lag = grid_t[i] - grid_t[j]
+            if lag < 0:
+                continue
+
+            k = int(lag / dt)
+            if k < len(psi):
+                H[i, j] = psi[k]
+
+    return H
 
 def reconstruct_driver_posterior(data, resolver):
     """
-    Posterior mean reconstruction of latent DRW driver.
-    Approximate GP conditioning using DRW kernel only.
+    Proper GP posterior reconstruction of latent driver.
+    Returns mean and std.
     """
 
-    t = np.array(data["grid_t"])
+    grid_t = np.array(data["grid_t"])
+    tau_grid = np.array(data["tau_grid"])
     bands = data["bands"]
+    M_BH = data["M_BH"]
 
-    # posterior hyperparameters
+    # --- posterior hyperparameters ---
     log_tau = np.mean(resolver("log_tau_drw"))
     log_sigma = np.mean(resolver("log_sigma"))
 
     tau = np.exp(log_tau)
     sigma = np.exp(log_sigma)
 
-    # -----------------------------
-    # DRW covariance
-    # -----------------------------
-    dt = np.abs(t[:, None] - t[None, :])
+    # --- DRW covariance ---
+    dt = np.abs(grid_t[:, None] - grid_t[None, :])
     Kxx = sigma**2 * np.exp(-dt / (tau + 1e-8))
 
-    # -----------------------------
-    # build pseudo-observation operator H
-    # -----------------------------
-    H = np.zeros((0, len(t)))
-
-    y_all = []
+    H_blocks = []
+    y_blocks = []
 
     for b, band in enumerate(bands):
 
-        t_obs = band["t"]
+        # mean parameters for reconstruction
+        log_mdot = np.mean(resolver("log_mdot"))
+        inc = np.mean(resolver("inclination"))
+        S = np.mean(resolver(f"S_{b}"))
+        C = np.mean(resolver(f"C_{b}"))
 
-        # interpolation matrix (X(t_grid) → X(t_obs))
-        W = np.zeros((len(t_obs), len(t)))
+        # --- response function ---
+        psi = build_response_function(
+            tau_grid,
+            log_mdot,
+            band["wavelength"],
+            inc,
+            M_BH,
+        )
+
+        # --- convolution operator ---
+        H_conv = build_convolution_matrix(grid_t, tau_grid, psi)
+
+        # --- sampling operator ---
+        t_obs = np.array(band["t"])
+        W = np.zeros((len(t_obs), len(grid_t)))
 
         for i, to in enumerate(t_obs):
-            idx = np.argmin(np.abs(t - to))
-            W[i, idx] = 1.0  # nearest-neighbour projection
+            idx = np.argmin(np.abs(grid_t - to))
+            W[i, idx] = 1.0
 
-        # crude lag spreading via response width
-        psi_width = 5  # days (visual approximation)
+        # --- full operator ---
+        H_band = S * (W @ H_conv)
 
-        for i in range(len(t_obs)):
-            for j in range(len(t)):
-                if abs(t_obs[i] - t[j]) < psi_width:
-                    W[i, j] += 0.1
+        H_blocks.append(H_band)
+        y_blocks.append(np.array(band["y"]) - C)
 
-        H = np.vstack([H, W])
-        y_all.append(np.array(band["y"]))
+    H = np.vstack(H_blocks)
+    y_all = np.concatenate(y_blocks)
 
-    y_all = np.concatenate(y_all)
-
-    # -----------------------------
-    # noise model
-    # -----------------------------
+    # --- noise ---
     noise = np.concatenate([b["yerr"] for b in bands])
     R = np.diag(noise**2 + 1e-6)
 
-    # -----------------------------
-    # GP conditioning
-    # -----------------------------
-    K_y = H @ Kxx @ H.T + R
-    K_xy = Kxx @ H.T
+    # --- GP conditioning ---
+    Ky = H @ Kxx @ H.T + R
+    Kxy = Kxx @ H.T
 
-    K_y_inv = np.linalg.inv(K_y)
+    alpha = np.linalg.solve(Ky, y_all)
+    mu = Kxy @ alpha
 
-    mu = K_xy @ K_y_inv @ y_all
+    # --- uncertainty ---
+    cov = Kxx - Kxy @ np.linalg.solve(Ky, Kxy.T)
+    std = np.sqrt(np.clip(np.diag(cov), 0, None))
 
-    return np.array(mu)
+    return mu, std
 
 
 def plot_lightcurve_fits(samples, data, fixed_params=None):
@@ -133,7 +163,7 @@ def plot_lightcurve_fits(samples, data, fixed_params=None):
     log_tau_drw_chain = resolver("log_tau_drw")
     log_sigma_chain = resolver("log_sigma")
 
-    driver = reconstruct_driver_posterior(data, resolver)
+    driver, driver_std = reconstruct_driver_posterior(data, resolver)
 
     bands = data["bands"]
 
@@ -161,7 +191,17 @@ def plot_lightcurve_fits(samples, data, fixed_params=None):
     ax_l = axes[0, 0]
     ax_r = axes[0, 1]
 
-    ax_l.plot(grid_t, driver, color="tab:blue", linewidth=2)
+    ax_l.plot(grid_t, driver, color="tab:blue", linewidth=2, label="mean")
+
+    ax_l.fill_between(
+        grid_t,
+        driver - driver_std,
+        driver + driver_std,
+        alpha=0.3,
+        label="±1σ",
+    )
+
+    ax_l.legend()
     ax_l.set_title("Driving Light Curve")
     ax_l.set_ylabel("Flux")
     ax_l.grid(alpha=0.2)
@@ -338,7 +378,8 @@ def plot_diagnostics_extended(mcmc, data):
     # ----------------------------------------
     # 2. POWER SPECTRUM OF DRIVER
     # ----------------------------------------
-    driver = np.array(data["driver"])
+    resolver = ParamResolver(samples, None)
+    driver, _ = reconstruct_driver_posterior(data, resolver)
     grid_t = np.array(data["grid_t"])
 
     dt = np.median(np.diff(grid_t))
