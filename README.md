@@ -61,11 +61,11 @@ This project uses Poetry.
 
 Install dependencies:
 
-poetry install
+`poetry install`
 
 Activate environment:
 
-poetry shell
+`poetry shell`
 
 ---
 
@@ -75,7 +75,7 @@ Synthetic datasets are generated using a DRW driver and convolution-based echo m
 
 Run:
 
-poetry run python ./data/generate_synthetic.py
+`poetry run python ./data/generate_synthetic.py`
 
 This will output CSV files:
 
@@ -93,6 +93,7 @@ time, flux, sigma
 
 Typical workflow:
 
+```
 from echofit.echofit import EchoFit
 
 fit = EchoFit(config)
@@ -102,6 +103,7 @@ fit.add_lightcurve_csv("data/optical.csv", band="optical")
 
 fit.build_model()
 fit.fit(num_warmup=200, num_samples=1000)
+```
 
 ---
 
@@ -109,16 +111,18 @@ fit.fit(num_warmup=200, num_samples=1000)
 
 Light curve + response function fits:
 
-fit.plot_lightcurve_fits()
+`fit.plot_lightcurve_fits()`
 
 MCMC diagnostics:
 
+```
 fit.plot_extended_diagnostics()
 fit.plot_mcmc_diagnostics()
+```
 
 Triangle / posterior structure plot:
 
-fit.plot_triangle()
+`fit.plot_triangle()`
 
 ---
 
@@ -147,10 +151,12 @@ The driving light curve is not directly observed. It is inferred via a DRW Gauss
 ## 2. Fixed parameters
 Parameters can be held fixed during inference:
 
+```
 fit.fit(num_warmup=100, num_samples=500, fixed_params={
     "inclination": 0.0,
     "log_sigma": 0.0
 })
+```
 
 Fixed parameters:
 - are excluded from sampling
