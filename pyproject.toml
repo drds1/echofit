@@ -1,39 +1,42 @@
-[tool.poetry]
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
 name = "echofit"
 version = "0.1.0"
-description = "Fourier-domain AGN reverberation mapping with Bayesian inference"
-authors = ["Your Name <your.email@example.com>"]
-license = "MIT"
+description = "Bayesian modelling of AGN reverberation-mapping light curves as a delayed echo of a driving light curve"
 readme = "README.md"
-packages = [{ include = "echofit", from = "src" }]
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "echofit contributors" }]
+keywords = ["AGN", "reverberation mapping", "Bayesian inference", "NumPyro", "astrophysics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-numpy = "^1.26"
-scipy = ">=1.11,<1.13"
-jax = "^0.4"
-jaxlib = "^0.4"
-numpyro = "^0.13"
-matplotlib = "^3.8"
-arviz = ">=0.16,<0.18"
-corner = "^2.2.3"
+dependencies = [
+    "jax>=0.4.28",
+    "jaxlib>=0.4.28",
+    "numpyro>=0.15.0",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "arviz>=0.17",
+]
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.0"
-ipykernel = "^6.0"
-black = "^24.0"
-ruff = "^0.3"
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "jupyter", "ipykernel"]
 
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[project.urls]
+Homepage = "https://example.com/echofit"
+
+[tool.setuptools.packages.find]
+include = ["echofit*"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
 testpaths = ["tests"]
-
-[tool.black]
-line-length = 88
-
-[tool.ruff]
-line-length = 88

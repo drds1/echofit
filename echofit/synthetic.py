@@ -1,0 +1,135 @@
+"""
+synthetic.py
+============
+
+Minimal synthetic-data generator used for the demo notebook and tests: draws
+a DRW driver on a dense Fourier grid, echoes it into several bands with the
+true forward model, and adds Gaussian noise -- so the resulting light curves
+have the correct lag ordering with wavelength (longer wavelength => longer
+lag) by construction.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, List, Optional
+
+import numpy as np
+
+from .forward_model import response_function, transfer_coeffs, compute_echo
+
+
+def make_frequency_grid(n_freq: int, t_span: float, dt_min: float) -> np.ndarray:
+    """Log-spaced angular-frequency grid from the light-curve baseline up to
+    (roughly) the Nyquist frequency set by the finest sampling."""
+    w_min = 2.0 * np.pi / t_span
+    w_max = np.pi / dt_min
+    return np.geomspace(w_min, w_max, n_freq)
+
+
+def generate_synthetic_dataset(
+    bands: Optional[Dict[str, float]] = None,
+    M_BH: float = 1.0e8,
+    log_mdot_true: float = 0.2,
+    inclination_true: float = 35.0,
+    sigma_drw_true: float = 0.3,
+    tau_drw_true: float = 30.0,
+    t_span: float = 200.0,
+    n_obs_per_band: int = 60,
+    n_freq: int = 60,
+    n_tau: int = 400,
+    tau_max: float = 60.0,
+    noise_level: float = 0.02,
+    seed: int = 0,
+) -> dict:
+    """Generate a synthetic multi-band reverberation-mapping dataset.
+
+    Parameters
+    ----------
+    bands : dict, optional
+        Mapping ``band_name -> wavelength_angstrom``. Defaults to five SDSS-
+        like bands spanning u through z, which guarantees a range of lags.
+    M_BH, log_mdot_true, inclination_true, sigma_drw_true, tau_drw_true :
+        Ground-truth physical parameters used to generate the data.
+    t_span : float
+        Total light-curve baseline, days.
+    n_obs_per_band : int
+        Number of (irregular) observation epochs per band.
+    n_freq, n_tau, tau_max : int, int, float
+        Resolution of the driver Fourier grid and the lag grid used to
+        build the ground-truth response functions.
+    noise_level : float
+        Fractional Gaussian noise added to each band (relative to that
+        band's echo amplitude).
+    seed : int
+        RNG seed.
+
+    Returns
+    -------
+    data : dict
+        ``{"bands": {name: {"t", "y", "yerr", "wavelength"}}, "truth": {...},
+        "freqs": array, "tau_grid": array}``.
+    """
+    rng = np.random.default_rng(seed)
+
+    if bands is None:
+        bands = {"u": 3543.0, "g": 4770.0, "r": 6231.0, "i": 7625.0, "z": 9134.0}
+
+    dt_min = t_span / (n_obs_per_band * 3)
+    freqs = make_frequency_grid(n_freq, t_span, dt_min)
+    tau_grid = np.linspace(0.0, tau_max, n_tau)
+
+    # -- draw a DRW driver realization on the fixed Fourier grid ---------
+    dw = np.gradient(freqs)
+    power = sigma_drw_true ** 2 * tau_drw_true / (1.0 + (freqs * tau_drw_true) ** 2)
+    amp_scale = np.sqrt(power * np.clip(dw, 1e-8, None))
+    S_true = rng.normal(0.0, amp_scale)
+    C_true = rng.normal(0.0, amp_scale)
+
+    out_bands = {}
+    per_band_truth = {}
+    for name, wavelength in sorted(bands.items(), key=lambda kv: kv[1]):
+        t = np.sort(rng.uniform(0.0, t_span, size=n_obs_per_band))
+
+        psi = np.asarray(
+            response_function(
+                tau_grid,
+                log_mdot=log_mdot_true,
+                wavelength=wavelength,
+                inclination=inclination_true,
+                M_BH=M_BH,
+            )
+        )
+        A, B = transfer_coeffs(tau_grid, psi, freqs)
+        echo = np.asarray(compute_echo(S_true, C_true, freqs, np.asarray(A), np.asarray(B), t))
+
+        S_band_true = rng.uniform(0.8, 1.5)
+        C_band_true = rng.uniform(-0.5, 0.5)
+        y_clean = S_band_true * echo + C_band_true
+
+        yerr = np.full_like(y_clean, noise_level * (np.std(y_clean) + 1e-3))
+        y = y_clean + rng.normal(0.0, yerr)
+
+        out_bands[name] = {
+            "t": t,
+            "y": y,
+            "yerr": yerr,
+            "wavelength": wavelength,
+        }
+        per_band_truth[name] = {
+            "S_band": S_band_true,
+            "C_band": C_band_true,
+            "tau_mean": float(np.trapz(tau_grid * psi, tau_grid)),
+        }
+
+    truth = {
+        "M_BH": M_BH,
+        "log_mdot": log_mdot_true,
+        "inclination": inclination_true,
+        "sigma_drw": sigma_drw_true,
+        "tau_drw": tau_drw_true,
+        "S": S_true,
+        "C": C_true,
+        "bands": per_band_truth,
+    }
+
+    return {"bands": out_bands, "truth": truth, "freqs": freqs, "tau_grid": tau_grid}

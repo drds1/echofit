@@ -1,205 +1,115 @@
-# EchoFit
+# echofit
 
-EchoFit is a Bayesian inference framework for modeling reverberation mapping / echo tomography light curves using a damped random walk (DRW) driving process and parameterized response functions.
+Bayesian modelling of AGN reverberation-mapping light curves as a delayed,
+smoothed echo of an unobserved driving (lamppost) X-ray light curve, built on
+[JAX](https://github.com/google/jax) + [NumPyro](https://num.pyro.ai/).
 
-The model jointly infers:
-- The latent driving light curve (as a Gaussian Process / DRW)
-- Time-delay response functions for multiple wavelength bands
-- Scaling and offset parameters per band
-- Physical parameters such as mass accretion rate and geometry-dependent quantities
+## Model
 
----
+Each band's observed light curve is modelled as
 
-# Model Overview
+```
+y_band(t) = S_band * ∫ X(t - τ) ψ(τ, λ_band, θ) dτ + C_band + ε
+```
 
-EchoFit assumes:
+- **Driver `X(t)`**: a damped random walk (DRW), represented as a truncated
+  Fourier series `X(t) = Σ_k [S_k sin(w_k t) + C_k cos(w_k t)]` on a fixed
+  frequency grid. The sine/cosine amplitudes `S_k, C_k` are given Gaussian
+  priors matching the DRW's Lorentzian power spectrum, so the two DRW
+  hyperparameters `sigma_drw` (variability amplitude) and `tau_drw` (damping
+  timescale) are inferred directly alongside the amplitudes.
+- **Response `ψ(τ, λ, θ)`**: a causal (`τ ≥ 0`), positive, skew-normal
+  function. Its mean lag follows the standard thin-disk reprocessing scaling
 
-## 1. Driving process
-The latent driver is modeled as a DRW (Ornstein–Uhlenbeck process), parameterized by:
-- `log_tau_drw` → variability timescale
-- `log_sigma` → amplitude of stochastic variability
+  ```
+  τ_mean ∝ (M_BH)^(2/3) * (Ṁ)^(1/3) * λ^(4/3)
+  ```
 
-## 2. Response model
-Each photometric band is generated via convolution:
+  with `M_BH` **fixed** (not inferred) and `log_mdot` (mass accretion rate)
+  inferred. Inclination controls only the *skewness* of the response, never
+  the mean lag.
+- **Convolution**: because the driver is exactly a Fourier series, the
+  convolution `∫ ψ(τ) X(t-τ) dτ` has a closed form in terms of the response
+  function's own Fourier transform, evaluated once per driver frequency
+  (`A_k = ∫ ψ cos(w_k τ) dτ`, `B_k = ∫ ψ sin(w_k τ) dτ`). Evaluating the echo
+  at any set of observation times is then a single vectorized matrix
+  contraction — no loop over `(t_obs, τ)` pairs, and no loop over bands.
 
-F_band(t) = S * (ψ(τ) * F_driver) + C
+Only these are inferred: `log_mdot`, `inclination`, `sigma_drw`, `tau_drw`,
+the driver Fourier coefficients `{S_k, C_k}`, and per-band `{S_band, C_band}`.
+**`M_BH` is always a fixed input.**
 
-Where:
-- ψ(τ) is the response function
-- S is a scaling parameter
-- C is a constant offset
-
-## 3. Physical parameters
-Depending on configuration, the model may include:
-- `log_mdot` (mass accretion rate proxy)
-- `inclination`
-- response shape parameters (e.g. wavelength-dependent lag structure)
-
----
-
-# Project Structure
+## Package layout
 
 ```
 echofit/
-├── src/echofit/
-│   ├── echofit.py              # main model class
-│   ├── plotting.py             # diagnostics + visualization
-│   ├── forward_model.py        # convolution + response functions
-│   └── inference.py            # inference engine
-│
-├── data/
-│   ├── generate_synthetic.py   # synthetic DRW + echo data generator
-│
-├── pyproject.toml
-└── README.md
-```
----
-
-# Installation
-
-This project uses Poetry.
-
-Install dependencies:
-
-`poetry install`
-
-Activate environment:
-
-`poetry shell`
-
----
-
-# Generating synthetic data
-
-Synthetic datasets are generated using a DRW driver and convolution-based echo model.
-
-Run:
-
-`poetry run python ./data/generate_synthetic.py`
-
-This will output CSV files:
-
-data/xray.csv
-data/uv.csv
-data/optical.csv
-
-Each file contains:
-
-time, flux, sigma
-
----
-
-# Running inference
-
-Typical workflow:
-
-```
-from echofit.echofit import EchoFit
-
-fit = EchoFit(config)
-fit.add_lightcurve_csv("data/xray.csv", band="xray")
-fit.add_lightcurve_csv("data/uv.csv", band="uv")
-fit.add_lightcurve_csv("data/optical.csv", band="optical")
-
-fit.build_model()
-fit.fit(num_warmup=200, num_samples=1000)
+    __init__.py        public API (EchoFit, forward_model helpers, synthetic data)
+    forward_model.py    lag_scaling, response_function, transfer_coeffs, compute_echo
+    model.py            NumPyro model (reverberation_model) + DRW prior scale
+    inference.py         run_mcmc: thin NUTS/MCMC wrapper
+    echofit.py           EchoFit: main user-facing class
+    plotting.py          plot_raw_lightcurves, plot_lightcurve_fits, plot_mcmc_diagnostics
+    synthetic.py          generate_synthetic_dataset for tests / the demo notebook
+notebooks/
+    demo.ipynb            end-to-end synthetic-data demo
+tests/
+    test_forward_model.py  basic sanity checks on the forward model
 ```
 
----
+## Install
 
-# Visualisation
-
-Light curve + response function fits:
-
-`fit.plot_lightcurve_fits()`
-
-MCMC diagnostics:
-
-```
-fit.plot_extended_diagnostics()
-fit.plot_mcmc_diagnostics()
+```bash
+pip install -e ".[dev]"
 ```
 
-Triangle / posterior structure plot:
+Requires a working JAX install (CPU is fine for the demo; see the
+[JAX install guide](https://github.com/google/jax#installation) for GPU/TPU).
 
-`fit.plot_triangle()`
+## Quickstart
 
----
+```python
+from echofit import EchoFit, generate_synthetic_dataset
 
-# Key Diagnostics
+data = generate_synthetic_dataset(M_BH=1e8)
 
-EchoFit includes built-in checks for:
+ef = EchoFit(M_BH=1e8)
+for name, d in data["bands"].items():
+    ef.add_lightcurve(name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
 
-## MCMC behaviour
-- Trace plots of all parameters
-- Log-likelihood convergence
-- Mixing diagnostics
+ef.build_grid(n_freq=60, n_tau=400)
+ef.fit(rng_seed=0, num_warmup=500, num_samples=500)
 
-## Model validation
-- Echo reconstruction vs observed light curves
-- Response function uncertainty bands
-- Power spectrum of inferred driver
-- DRW timescale comparison
-
----
-
-# Important Notes
-
-## 1. Driver is latent
-The driving light curve is not directly observed. It is inferred via a DRW Gaussian Process conditioned on all observed bands.
-
-## 2. Fixed parameters
-Parameters can be held fixed during inference:
-
-```
-fit.fit(num_warmup=100, num_samples=500, fixed_params={
-    "inclination": 0.0,
-    "log_sigma": 0.0
-})
+ef.plot_raw_lightcurves()
+ef.plot_lightcurve_fits()
+ef.plot_mcmc_diagnostics()
 ```
 
-Fixed parameters:
-- are excluded from sampling
-- are treated as constants in forward model evaluation
+See `notebooks/demo.ipynb` for the full walkthrough.
 
-## 3. Degeneracies
-Some parameters (especially S, C, and driver amplitude) may exhibit degeneracies depending on normalization choices.
+## Swapping the response function
 
----
+`forward_model.response_function` is the single place the response shape
+lives. To try a different parametric family (e.g. a top-hat, a Gamma
+response, a two-component response), write a new function with the same
+signature — `(tau_grid, log_mdot, wavelength, inclination, M_BH, ...) -> psi`
+returning a causal, area-normalized array on `tau_grid` — and pass it into
+`model.reverberation_model` in place of the default import. Nothing else
+(`transfer_coeffs`, `compute_echo`, the plotting code) needs to change.
 
-# Model assumptions
+## Status / caveats
 
-- Linear convolution between driver and response
-- DRW (Ornstein–Uhlenbeck) stochastic process for driver
-- Gaussian observational noise
-- Stationary response kernels per band
+This is a research scaffold, not a validated production pipeline:
 
----
-
-# Scientific interpretation
-
-The model performs probabilistic deconvolution of multi-band light curves into:
-- a shared stochastic driving process
-- wavelength-dependent transfer functions
-
----
-
-# Future improvements
-
-- Full HMC inference (replacing current MCMC sampler)
-- Improved driver reconstruction (posterior sampling instead of mean-field estimate)
-- Flexible non-parametric response functions
-- Fourier-based driver modeling alternative
-- Hierarchical population inference
-
----
-
-# License
-
-Internal research code (update as needed).
-
----
-
-# Author Notes
-
-Designed for reverberation mapping and time-domain inference with explicit physical interpretability and full posterior sampling of latent driving processes.
+- The Fourier-series driver with DRW-matched priors is an approximation to a
+  true DRW Gaussian process (a spectral / Hilbert-space GP approximation),
+  not an exact DRW likelihood (e.g. via a Kalman filter). It's fast and
+  differentiable, which is the point, but you should sanity-check recovered
+  `sigma_drw` / `tau_drw` against known DRW literature values for your
+  targets.
+- The skew-normal response is one reasonable causal, positive, skewable
+  parametric family; it is not derived from full disk radiative-transfer
+  physics.
+- The synthetic test in `generate_synthetic_dataset` uses the *same*
+  forward model to generate and fit data (a "self-consistency" check), which
+  validates the code but is not a substitute for validation against real
+  reverberation-mapping campaigns or independent simulations.
