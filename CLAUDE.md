@@ -13,11 +13,18 @@ and package layout.
 
 1. **Driver = Fourier series, not a literal DRW GP kernel.** `X(t) = Σ_k
    [S_k sin(w_k t) + C_k cos(w_k t)]` on a *fixed* frequency grid built once
-   in `EchoFit.build_grid()`. `S_k, C_k` are free NumPyro parameters with
-   priors set by the DRW's Lorentzian power spectrum (`model.drw_prior_scale`),
-   parameterized by inferred `sigma_drw`, `tau_drw`. This was requested
+   in `EchoFit.build_grid()`. `S_k, C_k` are deterministic transforms
+   (`S_k = S_raw_k * prior_scale_k`, non-centered) of unit-Normal
+   `S_raw, C_raw` NumPyro sample sites, with `prior_scale` set by the DRW's
+   Lorentzian power spectrum (`model.drw_prior_scale`), parameterized by
+   inferred `sigma_drw`, `tau_drw`. The Fourier-series driver was requested
    explicitly in the spec and also happens to make the whole model
    analytically convolvable (see next point) instead of needing a GP solve.
+   The non-centered form is deliberate — sampling `S, C` directly
+   ("centered") creates Neal's-funnel geometry against `sigma_drw`/`tau_drw`
+   that pins NUTS near its max-tree-depth ceiling. Don't revert to centered
+   without re-checking `tests/test_recovery.py`'s step-count/divergence
+   behavior.
 
 2. **Convolution is closed-form, not numerical double-integration.**
    Because the driver is a sum of sinusoids, `∫ ψ(τ) X(t-τ) dτ` reduces to a
@@ -84,7 +91,8 @@ and package layout.
 
 ```bash
 pip install -e ".[dev]"
-pytest                      # forward-model sanity checks
+pytest                      # forward-model unit tests + end-to-end MCMC
+                             # recovery test (tests/test_recovery.py, ~1-2 min)
 jupyter notebook notebooks/demo.ipynb
 ```
 

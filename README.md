@@ -46,6 +46,8 @@ echofit/
     __init__.py        public API (EchoFit, forward_model helpers, synthetic data)
     forward_model.py    lag_scaling, response_function, transfer_coeffs, compute_echo
     model.py            NumPyro model (reverberation_model) + DRW prior scale
+    grid_utils.py        estimate_dt_min: robust cadence estimate shared by
+                          EchoFit.build_grid() and synthetic.py
     inference.py         run_mcmc: thin NUTS/MCMC wrapper
     echofit.py           EchoFit: main user-facing class
     plotting.py          plot_raw_lightcurves, plot_lightcurve_fits, plot_mcmc_diagnostics
@@ -54,6 +56,7 @@ notebooks/
     demo.ipynb            end-to-end synthetic-data demo
 tests/
     test_forward_model.py  basic sanity checks on the forward model
+    test_recovery.py       end-to-end MCMC recovery test on synthetic data
 ```
 
 ## Install
@@ -113,3 +116,12 @@ This is a research scaffold, not a validated production pipeline:
   forward model to generate and fit data (a "self-consistency" check), which
   validates the code but is not a substitute for validation against real
   reverberation-mapping campaigns or independent simulations.
+- On the synthetic recovery test in `tests/test_recovery.py`, `log_mdot`
+  (which sets the mean lag) recovers well, but `inclination`, `sigma_drw`,
+  and `tau_drw` recover only loosely (wide/biased posteriors) even with zero
+  divergent transitions — NUTS tends to spend most samples at its
+  max-tree-depth ceiling on this model. Treat those three parameters'
+  posteriors with extra skepticism on real data until this is investigated
+  further; `EchoFit.fit()` exposes `max_tree_depth` and `chain_method` if
+  you want to bound worst-case sampling cost or add cheap diagnostic chains
+  while doing so.
