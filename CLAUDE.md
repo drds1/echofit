@@ -55,17 +55,30 @@ and package layout.
   DRW process. If you need exact DRW likelihoods, consider swapping in a
   Kalman-filter/celerite-style likelihood instead — that's a bigger change
   and would touch `model.py` more than `forward_model.py`.
-- `n_freq` / `n_tau` / `tau_max` in `EchoFit.build_grid()` are currently
-  simple heuristics (log-spaced frequencies from the baseline to a Nyquist
-  estimate off the tightest per-band sampling; `tau_max` defaults to half
-  the time baseline). Revisit if fitting real campaigns with very different
-  cadences per band.
-- This environment could not `pip install jax`/`numpyro` (no network access
-  at the time this repo was generated), so the code was written and
-  reasoned through carefully and checked with `python -m py_compile`, but
-  **has not been executed end-to-end**. Run `notebooks/demo.ipynb` (or
-  `pytest`) first thing after cloning to confirm everything actually runs,
-  and fix anything that trips up before relying on it.
+- `n_freq` / `n_tau` / `tau_max` in `EchoFit.build_grid()` are still simple
+  heuristics (log-spaced frequencies from the baseline to a Nyquist-style
+  estimate; `tau_max` defaults to half the time baseline). The frequency
+  upper bound (`w_max = pi / dt_min`) now comes from
+  `grid_utils.estimate_dt_min` — a robust (5th-percentile) estimate of
+  observation gaps, shared with `synthetic.py`'s ground-truth grid. This
+  replaced an earlier version that used the single *tightest* observed gap,
+  which for irregular sampling could blow up `w_max` and put the fit on a
+  completely different frequency basis than the data actually supports —
+  caught by `tests/test_recovery.py`. Still revisit if fitting real
+  campaigns with very different cadences per band; pass `dt_min` explicitly
+  to `build_grid()` if the data-driven estimate looks off.
+- The pipeline has now been run end-to-end (`pytest`, including an MCMC
+  recovery test on synthetic data in `tests/test_recovery.py`), so it's no
+  longer purely `py_compile`-checked. One finding from that: NUTS can spend
+  most samples pinned at the max-tree-depth ceiling on this model even after
+  non-centered reparameterizing the driver's `S`/`C` coefficients
+  (`model.py`) — `inclination`, `sigma_drw`, `tau_drw` recover only loosely
+  in the tested synthetic setup even with zero divergences. `log_mdot` (the
+  mean-lag-setting parameter) recovers well. Treat the weaker parameters'
+  posteriors with appropriate skepticism until this is investigated further;
+  `inference.run_mcmc`/`EchoFit.fit` now expose `max_tree_depth` and
+  `chain_method` if you want to bound worst-case cost or add cheap
+  diagnostic chains (`chain_method="vectorized"`) while digging in.
 
 ## Useful commands
 
