@@ -13,11 +13,18 @@ and package layout.
 
 1. **Driver = Fourier series, not a literal DRW GP kernel.** `X(t) = Σ_k
    [S_k sin(w_k t) + C_k cos(w_k t)]` on a *fixed* frequency grid built once
-   in `EchoFit.build_grid()`. `S_k, C_k` are free NumPyro parameters with
-   priors set by the DRW's Lorentzian power spectrum (`model.drw_prior_scale`),
-   parameterized by inferred `sigma_drw`, `tau_drw`. This was requested
+   in `EchoFit.build_grid()`. `S_k, C_k` are deterministic transforms
+   (`S_k = S_raw_k * prior_scale_k`, non-centered) of unit-Normal
+   `S_raw, C_raw` NumPyro sample sites, with `prior_scale` set by the DRW's
+   Lorentzian power spectrum (`model.drw_prior_scale`), parameterized by
+   inferred `sigma_drw`, `tau_drw`. The Fourier-series driver was requested
    explicitly in the spec and also happens to make the whole model
    analytically convolvable (see next point) instead of needing a GP solve.
+   The non-centered form is deliberate — sampling `S, C` directly
+   ("centered") creates Neal's-funnel geometry against `sigma_drw`/`tau_drw`
+   that pins NUTS near its max-tree-depth ceiling. Don't revert to centered
+   without re-checking `tests/test_recovery.py`'s step-count/divergence
+   behavior.
 
 2. **Convolution is closed-form, not numerical double-integration.**
    Because the driver is a sum of sinusoids, `∫ ψ(τ) X(t-τ) dτ` reduces to a
@@ -55,23 +62,37 @@ and package layout.
   DRW process. If you need exact DRW likelihoods, consider swapping in a
   Kalman-filter/celerite-style likelihood instead — that's a bigger change
   and would touch `model.py` more than `forward_model.py`.
-- `n_freq` / `n_tau` / `tau_max` in `EchoFit.build_grid()` are currently
-  simple heuristics (log-spaced frequencies from the baseline to a Nyquist
-  estimate off the tightest per-band sampling; `tau_max` defaults to half
-  the time baseline). Revisit if fitting real campaigns with very different
-  cadences per band.
-- This environment could not `pip install jax`/`numpyro` (no network access
-  at the time this repo was generated), so the code was written and
-  reasoned through carefully and checked with `python -m py_compile`, but
-  **has not been executed end-to-end**. Run `notebooks/demo.ipynb` (or
-  `pytest`) first thing after cloning to confirm everything actually runs,
-  and fix anything that trips up before relying on it.
+- `n_freq` / `n_tau` / `tau_max` in `EchoFit.build_grid()` are still simple
+  heuristics (log-spaced frequencies from the baseline to a Nyquist-style
+  estimate; `tau_max` defaults to half the time baseline). The frequency
+  upper bound (`w_max = pi / dt_min`) now comes from
+  `grid_utils.estimate_dt_min` — a robust (5th-percentile) estimate of
+  observation gaps, shared with `synthetic.py`'s ground-truth grid. This
+  replaced an earlier version that used the single *tightest* observed gap,
+  which for irregular sampling could blow up `w_max` and put the fit on a
+  completely different frequency basis than the data actually supports —
+  caught by `tests/test_recovery.py`. Still revisit if fitting real
+  campaigns with very different cadences per band; pass `dt_min` explicitly
+  to `build_grid()` if the data-driven estimate looks off.
+- The pipeline has now been run end-to-end (`pytest`, including an MCMC
+  recovery test on synthetic data in `tests/test_recovery.py`), so it's no
+  longer purely `py_compile`-checked. One finding from that: NUTS can spend
+  most samples pinned at the max-tree-depth ceiling on this model even after
+  non-centered reparameterizing the driver's `S`/`C` coefficients
+  (`model.py`) — `inclination`, `sigma_drw`, `tau_drw` recover only loosely
+  in the tested synthetic setup even with zero divergences. `log_mdot` (the
+  mean-lag-setting parameter) recovers well. Treat the weaker parameters'
+  posteriors with appropriate skepticism until this is investigated further;
+  `inference.run_mcmc`/`EchoFit.fit` now expose `max_tree_depth` and
+  `chain_method` if you want to bound worst-case cost or add cheap
+  diagnostic chains (`chain_method="vectorized"`) while digging in.
 
 ## Useful commands
 
 ```bash
 pip install -e ".[dev]"
-pytest                      # forward-model sanity checks
+pytest                      # forward-model unit tests + end-to-end MCMC
+                             # recovery test (tests/test_recovery.py, ~1-2 min)
 jupyter notebook notebooks/demo.ipynb
 ```
 

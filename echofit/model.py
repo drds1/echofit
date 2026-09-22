@@ -81,9 +81,18 @@ def reverberation_model(
     prior_scale = drw_prior_scale(freqs, sigma_drw, tau_drw)
     n_freq = freqs.shape[0]
 
+    # Non-centered parameterization: S, C's scale is itself a sampled
+    # hyperparameter (via prior_scale(sigma_drw, tau_drw)), which produces
+    # a Neal's-funnel geometry if sampled directly ("centered") -- NUTS then
+    # can't find one step size that works both where prior_scale is small
+    # and where it's large, and every trajectory runs to max tree depth.
+    # Sampling unit-scale S_raw/C_raw and pushing the hyperparameter
+    # dependence into a deterministic transform removes that coupling.
     with numpyro.plate("freq", n_freq):
-        S = numpyro.sample("S", dist.Normal(0.0, prior_scale))
-        C = numpyro.sample("C", dist.Normal(0.0, prior_scale))
+        S_raw = numpyro.sample("S_raw", dist.Normal(0.0, 1.0))
+        C_raw = numpyro.sample("C_raw", dist.Normal(0.0, 1.0))
+    S = numpyro.deterministic("S", S_raw * prior_scale)
+    C = numpyro.deterministic("C", C_raw * prior_scale)
 
     # -- shared reprocessing parameters ----------------------------------
     log_mdot = numpyro.sample("log_mdot", dist.Normal(0.0, 1.0))

@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from .forward_model import response_function, transfer_coeffs, compute_echo
+from .grid_utils import estimate_dt_min
 
 
 def make_frequency_grid(n_freq: int, t_span: float, dt_min: float) -> np.ndarray:
@@ -74,7 +75,17 @@ def generate_synthetic_dataset(
     if bands is None:
         bands = {"u": 3543.0, "g": 4770.0, "r": 6231.0, "i": 7625.0, "z": 9134.0}
 
-    dt_min = t_span / (n_obs_per_band * 3)
+    sorted_bands = sorted(bands.items(), key=lambda kv: kv[1])
+    # sample every band's observation times up front so the frequency grid
+    # below is derived from the *actual* (irregular) cadence -- via the same
+    # estimator EchoFit.build_grid() uses -- rather than a prior guess. This
+    # keeps the ground-truth driver and the fitting basis on the same grid.
+    t_by_band = {
+        name: np.sort(rng.uniform(0.0, t_span, size=n_obs_per_band))
+        for name, _ in sorted_bands
+    }
+
+    dt_min = estimate_dt_min(t_by_band.values(), t_span=t_span)
     freqs = make_frequency_grid(n_freq, t_span, dt_min)
     tau_grid = np.linspace(0.0, tau_max, n_tau)
 
@@ -87,8 +98,8 @@ def generate_synthetic_dataset(
 
     out_bands = {}
     per_band_truth = {}
-    for name, wavelength in sorted(bands.items(), key=lambda kv: kv[1]):
-        t = np.sort(rng.uniform(0.0, t_span, size=n_obs_per_band))
+    for name, wavelength in sorted_bands:
+        t = t_by_band[name]
 
         psi = np.asarray(
             response_function(
