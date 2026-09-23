@@ -9,8 +9,16 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+import numpy as np
 import jax
 from numpyro.infer import MCMC, NUTS
+
+
+def _build_kernel(model: Callable, target_accept_prob: float, max_tree_depth: Optional[int]):
+    nuts_kwargs = dict(target_accept_prob=target_accept_prob)
+    if max_tree_depth is not None:
+        nuts_kwargs["max_tree_depth"] = max_tree_depth
+    return NUTS(model, **nuts_kwargs)
 
 
 def run_mcmc(
@@ -62,10 +70,7 @@ def run_mcmc(
         Fitted MCMC object; use ``mcmc.get_samples()`` for posterior draws
         and ``mcmc.print_summary()`` / ``arviz`` for diagnostics.
     """
-    nuts_kwargs = dict(target_accept_prob=target_accept_prob)
-    if max_tree_depth is not None:
-        nuts_kwargs["max_tree_depth"] = max_tree_depth
-    kernel = NUTS(model, **nuts_kwargs)
+    kernel = _build_kernel(model, target_accept_prob, max_tree_depth)
     mcmc = MCMC(
         kernel,
         num_warmup=num_warmup,
@@ -76,3 +81,83 @@ def run_mcmc(
     )
     mcmc.run(rng_key, **model_kwargs)
     return mcmc
+
+
+def run_mcmc_chunked(
+    model: Callable,
+    model_kwargs: dict,
+    rng_key: jax.Array,
+    num_warmup: int,
+    num_samples: int,
+    checkpoint_every: int,
+    target_accept_prob: float = 0.85,
+    max_tree_depth: Optional[int] = None,
+    progress_bar: bool = True,
+    init_last_state=None,
+    n_already_done: int = 0,
+    on_chunk_done: Optional[Callable] = None,
+):
+    """Run NUTS in checkpointable chunks of up to ``checkpoint_every`` samples
+    each, single chain only. Resumes from ``init_last_state`` (a previous
+    chunk's ``mcmc.last_state``) if given, skipping warmup entirely --
+    this is NumPyro's documented pattern for sequentially drawing samples
+    (``mcmc.post_warmup_state = mcmc.last_state``, see ``MCMC.post_warmup_state``'s
+    docstring). ``n_already_done`` should be the number of post-warmup
+    samples already collected in prior chunks (from ``init_last_state``'s
+    run), so this only samples the remainder of ``num_samples``.
+
+    ``on_chunk_done(mcmc, last_state, n_done_total)`` is called after every
+    chunk (including the warmup-containing first one) -- use it to persist
+    the chunk's samples/extra_fields/state to disk for resuming later.
+
+    Returns
+    -------
+    samples, samples_by_chain, extra_fields : dict
+        Accumulated across all chunks (this call's + any already done before
+        it, via ``init_last_state``); ``samples_by_chain`` has a leading
+        ``(1, n_total_samples)`` shape for compatibility with
+        ``plot_mcmc_diagnostics``.
+    last_state
+        The final chunk's ``mcmc.last_state``, for further resuming.
+    """
+    last_state = init_last_state
+    n_done = n_already_done
+    samples_chunks, samples_by_chain_chunks, extra_chunks = [], [], []
+
+    if n_done >= num_samples:
+        # Already fully sampled (e.g. resuming a run that had already
+        # completed) -- nothing left to do.
+        return {}, {}, {}, last_state
+
+    while n_done < num_samples:
+        this_chunk = min(checkpoint_every, num_samples - n_done)
+        kernel = _build_kernel(model, target_accept_prob, max_tree_depth)
+        mcmc = MCMC(
+            kernel,
+            num_warmup=0 if last_state is not None else num_warmup,
+            num_samples=this_chunk,
+            num_chains=1,
+            progress_bar=progress_bar,
+        )
+        if last_state is not None:
+            mcmc.post_warmup_state = last_state
+            mcmc.run(last_state.rng_key, **model_kwargs)
+        else:
+            mcmc.run(rng_key, **model_kwargs)
+
+        samples_chunks.append(mcmc.get_samples())
+        samples_by_chain_chunks.append(mcmc.get_samples(group_by_chain=True))
+        extra_chunks.append(mcmc.get_extra_fields())
+        last_state = mcmc.last_state
+        n_done += this_chunk
+
+        if on_chunk_done is not None:
+            on_chunk_done(mcmc, last_state, n_done)
+
+    samples = {k: np.concatenate([c[k] for c in samples_chunks], axis=0) for k in samples_chunks[0]}
+    samples_by_chain = {
+        k: np.concatenate([c[k] for c in samples_by_chain_chunks], axis=1)
+        for k in samples_by_chain_chunks[0]
+    }
+    extra_fields = {k: np.concatenate([c[k] for c in extra_chunks], axis=0) for k in extra_chunks[0]}
+    return samples, samples_by_chain, extra_fields, last_state
