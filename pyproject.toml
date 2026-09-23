@@ -27,6 +27,8 @@ dependencies = [
     "numpy>=1.24",
     "matplotlib>=3.7",
     "arviz>=0.17",
+    "h5netcdf>=1.0",
+    "h5py>=3.7",
 ]
 
 [project.optional-dependencies]

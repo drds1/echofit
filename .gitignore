@@ -208,3 +208,6 @@ __marimo__/
 
 # scripts/smoke_test.py output
 smoke_test_output/
+
+# EchoFit(title=...) run outputs (default location; see run_manager.py)
+outputs/

@@ -52,6 +52,20 @@ and package layout.
    array. `transfer_coeffs`/`compute_echo`/plotting never assume the skew-
    normal specifically.
 
+6. **On-disk run management (`title=`) is opt-in and single-chain only.**
+   `EchoFit(M_BH=..., title=...)` switches `.fit()` from the original
+   purely-in-memory path to a checkpointed one (`inference.run_mcmc_chunked`)
+   that saves progress every `checkpoint_every` samples and can be resumed
+   via `EchoFit.resume(title)`. This only covers the *sampling* phase (not
+   warmup) and forces `num_chains=1` -- both deliberate scope limits, not
+   oversights; see the "Fitting your own light curves" section of
+   `README.md`. Without `title`, behavior is byte-for-byte the original
+   `EchoFit` -- don't let the checkpointed path's bookkeeping leak into it.
+   `run_manager.py` owns the on-disk layout/serialization,
+   `reporting.py` owns the shared plots+HTML (used by both this path and
+   `scripts/smoke_test.py` -- don't duplicate report-building logic back
+   into either call site).
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model
@@ -86,6 +100,12 @@ and package layout.
   `inference.run_mcmc`/`EchoFit.fit` now expose `max_tree_depth` and
   `chain_method` if you want to bound worst-case cost or add cheap
   diagnostic chains (`chain_method="vectorized"`) while digging in.
+- `pyproject.toml` gained `h5netcdf`/`h5py` (a netCDF backend for ArviZ,
+  which was already a listed dependency but had no working backend
+  installed) so `EchoFit(title=...)` can write `chains.nc`. That write is
+  wrapped in a try/except in `echofit.py::_save_chains` and only warns on
+  failure -- `chains.npz` (plain numpy) is the dependency-free guaranteed
+  artifact, don't remove it even if the netCDF path seems reliable.
 
 ## Useful commands
 

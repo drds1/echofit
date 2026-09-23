@@ -63,7 +63,7 @@ def test_mcmc_recovers_synthetic_truth():
     truth = data["truth"]
 
     # -- sampling health -------------------------------------------------
-    diverging = np.asarray(ef.mcmc.get_extra_fields()["diverging"])
+    diverging = np.asarray(ef.extra_fields["diverging"])
     assert diverging.mean() < 0.05, f"{diverging.sum()}/{len(diverging)} divergent transitions"
 
     for name in ("log_mdot", "inclination", "sigma_drw", "tau_drw", "S", "C"):
