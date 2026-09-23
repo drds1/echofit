@@ -50,7 +50,18 @@ and package layout.
    replacement must accept `(tau_grid, log_mdot, wavelength, inclination,
    M_BH, ...)` and return a causal (`τ<0 → 0`), area-normalised-on-`tau_grid`
    array. `transfer_coeffs`/`compute_echo`/plotting never assume the skew-
-   normal specifically.
+   normal specifically. To actually swap it at runtime (e.g. for a quick
+   experiment, without editing `forward_model.py`), reassign
+   `echofit.model.response_function`, e.g. `import echofit.model as model;
+   model.response_function = my_fn`. This is the *only* place that needs
+   patching: `echofit.py`'s plotting code reads it via `model.response_function`
+   (attribute access on the module, evaluated at call time) rather than its
+   own `from .forward_model import response_function`, specifically so a
+   swap there is honoured by both fitting and plotting consistently. Don't
+   reintroduce a direct `response_function` import in `echofit.py` --that
+   was a real bug once (the fit used the swapped function but the plot
+   silently kept re-deriving ψ from the original, producing a plot
+   inconsistent with what NUTS actually fit).
 
 6. **On-disk run management (`title=`) is opt-in and single-chain only.**
    `EchoFit(M_BH=..., title=...)` switches `.fit()` from the original

@@ -26,9 +26,10 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+from . import model as _model
 from .model import reverberation_model
 from .inference import run_mcmc, run_mcmc_chunked
-from .forward_model import response_function, transfer_coeffs, compute_echo, driver_at
+from .forward_model import transfer_coeffs, compute_echo, driver_at
 from .grid_utils import estimate_dt_min
 from . import plotting
 from . import reporting
@@ -458,7 +459,13 @@ class EchoFit:
         inclination = jnp.asarray(self.samples["inclination"])[idx]
 
         def single_draw(S_s, C_s, log_mdot_s, incl_s, wavelength, S_band_s, C_band_s):
-            psi = response_function(
+            # Read via the model module's attribute, not a direct import of our
+            # own, so that swapping model.response_function (see CLAUDE.md's
+            # "swappable by contract" design decision) is reflected here too --
+            # a direct `from .forward_model import response_function` would
+            # bind an independent copy that a swap on model.py wouldn't reach,
+            # leaving the fit and this plot inconsistent with each other.
+            psi = _model.response_function(
                 self.tau_grid, log_mdot=log_mdot_s, wavelength=wavelength,
                 inclination=incl_s, M_BH=self.M_BH,
             )
