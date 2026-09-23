@@ -14,17 +14,17 @@ and package layout.
 1. **Driver = Fourier series, not a literal DRW GP kernel.** `X(t) = Σ_k
    [S_k sin(w_k t) + C_k cos(w_k t)]` on a *fixed* frequency grid built once
    in `EchoFit.build_grid()`. `S_k, C_k` are deterministic transforms
-   (`S_k = S_raw_k * prior_scale_k`, non-centered) of unit-Normal
+   (`S_k = S_raw_k * prior_scale_k`, non-centred) of unit-Normal
    `S_raw, C_raw` NumPyro sample sites, with `prior_scale` set by the DRW's
-   Lorentzian power spectrum (`model.drw_prior_scale`), parameterized by
+   Lorentzian power spectrum (`model.drw_prior_scale`), parameterised by
    inferred `sigma_drw`, `tau_drw`. The Fourier-series driver was requested
    explicitly in the spec and also happens to make the whole model
    analytically convolvable (see next point) instead of needing a GP solve.
-   The non-centered form is deliberate — sampling `S, C` directly
-   ("centered") creates Neal's-funnel geometry against `sigma_drw`/`tau_drw`
-   that pins NUTS near its max-tree-depth ceiling. Don't revert to centered
+   The non-centred form is deliberate — sampling `S, C` directly
+   ("centred") creates Neal's-funnel geometry against `sigma_drw`/`tau_drw`
+   that pins NUTS near its max-tree-depth ceiling. Don't revert to centred
    without re-checking `tests/test_recovery.py`'s step-count/divergence
-   behavior.
+   behaviour.
 
 2. **Convolution is closed-form, not numerical double-integration.**
    Because the driver is a sum of sinusoids, `∫ ψ(τ) X(t-τ) dτ` reduces to a
@@ -48,7 +48,7 @@ and package layout.
 
 5. **Response function is swappable by contract, not inheritance.** Any
    replacement must accept `(tau_grid, log_mdot, wavelength, inclination,
-   M_BH, ...)` and return a causal (`τ<0 → 0`), area-normalized-on-`tau_grid`
+   M_BH, ...)` and return a causal (`τ<0 → 0`), area-normalised-on-`tau_grid`
    array. `transfer_coeffs`/`compute_echo`/plotting never assume the skew-
    normal specifically.
 
@@ -59,9 +59,9 @@ and package layout.
    via `EchoFit.resume(title)`. This only covers the *sampling* phase (not
    warmup) and forces `num_chains=1` -- both deliberate scope limits, not
    oversights; see the "Fitting your own light curves" section of
-   `README.md`. Without `title`, behavior is byte-for-byte the original
+   `README.md`. Without `title`, behaviour is byte-for-byte the original
    `EchoFit` -- don't let the checkpointed path's bookkeeping leak into it.
-   `run_manager.py` owns the on-disk layout/serialization,
+   `run_manager.py` owns the on-disk layout/serialisation,
    `reporting.py` owns the shared plots+HTML (used by both this path and
    `scripts/smoke_test.py` -- don't duplicate report-building logic back
    into either call site).
@@ -92,11 +92,11 @@ and package layout.
   recovery test on synthetic data in `tests/test_recovery.py`), so it's no
   longer purely `py_compile`-checked. One finding from that: NUTS can spend
   most samples pinned at the max-tree-depth ceiling on this model even after
-  non-centered reparameterizing the driver's `S`/`C` coefficients
+  non-centred reparameterising the driver's `S`/`C` coefficients
   (`model.py`) — `inclination`, `sigma_drw`, `tau_drw` recover only loosely
   in the tested synthetic setup even with zero divergences. `log_mdot` (the
   mean-lag-setting parameter) recovers well. Treat the weaker parameters'
-  posteriors with appropriate skepticism until this is investigated further;
+  posteriors with appropriate scepticism until this is investigated further;
   `inference.run_mcmc`/`EchoFit.fit` now expose `max_tree_depth` and
   `chain_method` if you want to bound worst-case cost or add cheap
   diagnostic chains (`chain_method="vectorized"`) while digging in.

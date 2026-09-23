@@ -136,7 +136,7 @@ def generate_synthetic_dataset(
     freqs = make_frequency_grid(n_freq, t_span, dt_min)
     tau_grid = np.linspace(0.0, tau_max, n_tau)
 
-    # -- draw a DRW driver realization on the fixed Fourier grid ---------
+    # -- draw a DRW driver realisation on the fixed Fourier grid ---------
     dw = np.gradient(freqs)
     power = sigma_drw_true ** 2 * tau_drw_true / (1.0 + (freqs * tau_drw_true) ** 2)
     amp_scale = np.sqrt(power * np.clip(dw, 1e-8, None))

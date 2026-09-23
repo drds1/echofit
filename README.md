@@ -32,7 +32,7 @@ y_band(t) = S_band * ∫ X(t - τ) ψ(τ, λ_band, θ) dτ + C_band + ε
   convolution `∫ ψ(τ) X(t-τ) dτ` has a closed form in terms of the response
   function's own Fourier transform, evaluated once per driver frequency
   (`A_k = ∫ ψ cos(w_k τ) dτ`, `B_k = ∫ ψ sin(w_k τ) dτ`). Evaluating the echo
-  at any set of observation times is then a single vectorized matrix
+  at any set of observation times is then a single vectorised matrix
   contraction — no loop over `(t_obs, τ)` pairs, and no loop over bands.
 
 Only these are inferred: `log_mdot`, `inclination`, `sigma_drw`, `tau_drw`,
@@ -181,7 +181,7 @@ for that, see `tests/test_recovery.py`.
 lives. To try a different parametric family (e.g. a top-hat, a Gamma
 response, a two-component response), write a new function with the same
 signature — `(tau_grid, log_mdot, wavelength, inclination, M_BH, ...) -> psi`
-returning a causal, area-normalized array on `tau_grid` — and pass it into
+returning a causal, area-normalised array on `tau_grid` — and pass it into
 `model.reverberation_model` in place of the default import. Nothing else
 (`transfer_coeffs`, `compute_echo`, the plotting code) needs to change.
 
@@ -207,7 +207,7 @@ This is a research scaffold, not a validated production pipeline:
   and `tau_drw` recover only loosely (wide/biased posteriors) even with zero
   divergent transitions — NUTS tends to spend most samples at its
   max-tree-depth ceiling on this model. Treat those three parameters'
-  posteriors with extra skepticism on real data until this is investigated
+  posteriors with extra scepticism on real data until this is investigated
   further; `EchoFit.fit()` exposes `max_tree_depth` and `chain_method` if
   you want to bound worst-case sampling cost or add cheap diagnostic chains
   while doing so.
