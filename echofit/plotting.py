@@ -33,21 +33,36 @@ def _band_colours(bands: Dict[str, dict]):
     return ordered, colours
 
 
-def plot_raw_lightcurves(bands: Dict[str, dict], figsize_per_panel=(7, 1.8)):
-    """One panel per band (no overlay), ordered shortest -> longest wavelength.
+def plot_raw_lightcurves(bands: Dict[str, dict], driver: Optional[dict] = None, figsize_per_panel=(7, 1.8)):
+    """One panel per band (no overlay), ordered shortest -> longest wavelength,
+    plus a driver panel first if given.
 
     Parameters
     ----------
     bands : dict
         ``{band_name: {"t", "y", "yerr", "wavelength"}}``.
+    driver : dict, optional
+        ``{"t", "y", "yerr"}`` for a light curve directly observing the
+        driver (see ``EchoFit.add_driver_lightcurve``), plotted in its own
+        panel first, ahead of the wavelength-ordered bands.
     """
     ordered, colours = _band_colours(bands)
-    n = len(ordered)
+    n = len(ordered) + (1 if driver is not None else 0)
     fig, axes = plt.subplots(
         n, 1, figsize=(figsize_per_panel[0], figsize_per_panel[1] * n), sharex=True
     )
     if n == 1:
         axes = [axes]
+
+    if driver is not None:
+        ax = axes[0]
+        ax.errorbar(
+            driver["t"], driver["y"], yerr=driver["yerr"], fmt="o", ms=4, color="0.2",
+            ecolor="0.2", alpha=0.85, capsize=3, elinewidth=1.2, capthick=1.2,
+        )
+        ax.set_ylabel("driver")
+        ax.grid(alpha=0.25)
+        axes = axes[1:]
 
     for ax, (name, d) in zip(axes, ordered):
         ax.errorbar(
@@ -60,7 +75,7 @@ def plot_raw_lightcurves(bands: Dict[str, dict], figsize_per_panel=(7, 1.8)):
     axes[-1].set_xlabel("time [days]")
     fig.suptitle("Raw multi-band light curves")
     fig.tight_layout()
-    return fig, axes
+    return fig, fig.axes
 
 
 def plot_lightcurve_fits(
@@ -70,6 +85,7 @@ def plot_lightcurve_fits(
     tau_grid: np.ndarray,
     psi_samples: Dict[str, np.ndarray],
     driver_samples: Optional[np.ndarray] = None,
+    driver_points: Optional[tuple] = None,
     figsize_per_row=(10, 2.2),
     driver_row_height=1.8,
 ):
@@ -96,6 +112,12 @@ def plot_lightcurve_fits(
         ``y_pred_samples``. If given, plotted as an extra panel above the
         per-band rows, sharing the same time axis so lags between the
         driver and each band's echo are visually alignable.
+    driver_points : (t, X_implied, yerr_implied) tuple, optional
+        A registered driver light curve's own data, back-transformed
+        through the posterior-mean ``S_driver``/``C_driver`` into the same
+        units as ``driver_samples`` (i.e. ``(y - C_driver) / S_driver``) so
+        it can be overlaid on the driver panel as a direct cross-check that
+        the inferred X(t) actually tracks what was observed.
     """
     ordered, colours = _band_colours(bands)
     n = len(ordered)
@@ -115,6 +137,14 @@ def plot_lightcurve_fits(
         ax_drv.fill_between(t_fine, lo95, hi95, color="0.5", alpha=0.15)
         ax_drv.fill_between(t_fine, lo68, hi68, color="0.5", alpha=0.35)
         ax_drv.plot(t_fine, med, color="0.2", lw=1.5)
+        if driver_points is not None:
+            t_d, X_d, yerr_d = driver_points
+            ax_drv.errorbar(
+                t_d, X_d, yerr=yerr_d, fmt="o", ms=4, color="C3",
+                ecolor="C3", alpha=0.7, capsize=3, elinewidth=1.2, capthick=1.2,
+                label="driver data (back-transformed)",
+            )
+            ax_drv.legend(fontsize=7, loc="upper right")
         ax_drv.set_ylabel("driver\nX(t)")
         ax_drv.set_title("Inferred driving light curve", fontsize=10)
         ax_drv.grid(alpha=0.25)

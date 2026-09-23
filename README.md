@@ -102,7 +102,8 @@ the driver Fourier coefficients `{S_k, C_k}`, and per-band `{S_band, C_band}`.
 ```
 echofit/
     __init__.py        public API (EchoFit, forward_model helpers, synthetic data)
-    forward_model.py    lag_scaling, response_function, transfer_coeffs, compute_echo
+    forward_model.py    lag_scaling, response_function, tophat_response_free (free-lag
+                          mode), transfer_coeffs, compute_echo, driver_at
     model.py            NumPyro model (reverberation_model) + DRW prior scale
     grid_utils.py        estimate_dt_min: robust cadence estimate shared by
                           EchoFit.build_grid() and synthetic.py
@@ -115,7 +116,9 @@ echofit/
                           used by both EchoFit(title=...) and scripts/smoke_test.py
     run_manager.py        on-disk run layout, output-dir resolution, checkpoint
                           save/load (see "Fitting your own light curves" below)
-    synthetic.py          generate_synthetic_dataset for tests / the demo notebook
+    synthetic.py          generate_synthetic_dataset (physical bands) and
+                          generate_free_lag_dataset (free-lag bands + driver)
+                          for tests / the demo notebook
 notebooks/
     demo.ipynb            end-to-end synthetic-data demo
 scripts/
@@ -124,6 +127,12 @@ tests/
     test_forward_model.py  basic sanity checks on the forward model
     test_recovery.py       end-to-end MCMC recovery test on synthetic data
     test_run_manager.py    checkpointing + resume-after-interruption tests
+    test_response_function_swap.py  swapped response_function reflected in
+                          both fit and plot
+    test_shift_degeneracy.py  deterministic proof of the free-lag identifiability
+                          claim above
+    test_free_lag_mode.py  validation (M_BH/driver requirements) + a real
+                          driver-anchored free-lag recovery test
 ```
 
 ## Install
@@ -235,13 +244,58 @@ for that, see `tests/test_recovery.py`.
 
 ## Swapping the response function
 
-`forward_model.response_function` is the single place the response shape
-lives. To try a different parametric family (e.g. a top-hat, a Gamma
-response, a two-component response), write a new function with the same
-signature — `(tau_grid, log_mdot, wavelength, inclination, M_BH, ...) -> psi`
-returning a causal, area-normalised array on `tau_grid` — and pass it into
-`model.reverberation_model` in place of the default import. Nothing else
-(`transfer_coeffs`, `compute_echo`, the plotting code) needs to change.
+`forward_model.response_function` is the single place the physical
+(`lag_mode="physical"`, see below) response shape lives. To try a
+different parametric family, write a new function with the same signature
+— `(tau_grid, log_mdot, wavelength, inclination, M_BH, ...) -> psi`
+returning a causal, area-normalised array on `tau_grid` — and reassign it
+at runtime: `import echofit.model as model; model.response_function =
+my_fn`, then fit as usual. That's the only place to patch: `echofit.py`'s
+plotting code reads it the same way (module-attribute access, not its own
+import), so a swap is honoured consistently by both fitting and plotting.
+
+## Emission-line / free-lag mode and driver light curves
+
+Every band defaults to `lag_mode="physical"`: its mean lag comes from
+`lag_scaling(log_mdot, wavelength, M_BH)`, tied to every other physical
+band through the one shared `log_mdot`. Pass `lag_mode="free"` to
+`add_lightcurve()` instead for a band whose lag isn't physically tied to
+the others at all — e.g. an emission line reverberating the continuum,
+where each line's lag is its own independent quantity, not a point on a
+shared `λ^(4/3)` curve. A free-lag band gets its own inferred `tau_{name}`
+and a smoothed top-hat response (`forward_model.tophat_response_free`)
+centred on it.
+
+**This needs a driver light curve to be identifiable.** A global shift of
+the driver, compensated by shifting every band's lag the same amount,
+leaves the predicted light curves exactly unchanged (worked through in the
+"Background" section above, and proved directly — no MCMC, no sampling
+noise — in `tests/test_shift_degeneracy.py`). The physical response
+escapes this because the shared `log_mdot` can only *rescale* every band's
+lag together, not shift them by a common additive amount; a free-lag
+band's `tau_{name}` has no such tie, so without an anchor the fit is
+exactly degenerate in the absolute lag origin.
+
+`add_driver_lightcurve(t, y, yerr)` registers a light curve that directly
+(zero-lag) observes the driver itself — an X-ray/lamppost continuum, or a
+directly monitored AGN continuum anchoring an emission-line fit — modelled
+as `y(t) = S_driver * X(t) + C_driver` (its own scale/offset, no
+convolution). `EchoFit.fit()` warns if any `lag_mode="free"` band is
+registered without one:
+
+```python
+ef = EchoFit(M_BH=None)  # M_BH only matters for lag_mode="physical" bands
+ef.add_driver_lightcurve(t=t_x, y=y_x, yerr=yerr_x)  # e.g. an X-ray continuum
+ef.add_lightcurve("Hbeta", wavelength=4861.0, t=t_hb, y=y_hb, yerr=yerr_hb, lag_mode="free")
+ef.add_lightcurve("Halpha", wavelength=6563.0, t=t_ha, y=y_ha, yerr=yerr_ha, lag_mode="free")
+ef.build_grid()
+ef.fit(num_warmup=1000, num_samples=1000)
+```
+
+`plot_raw_lightcurves()`/`plot_lightcurve_fits()` show the driver in its
+own panel — the latter overlays the driver's own data (back-transformed
+through the posterior-mean `S_driver`/`C_driver`) on the inferred driving
+light curve panel, a direct visual check that the two agree.
 
 ## Status / caveats
 
