@@ -8,11 +8,11 @@ smoothed echo of an unobserved driving (lamppost) X-ray light curve, built on
 
 Active galactic nuclei (AGN) are powered by gas accreting onto a
 supermassive black hole through a hot, luminous disk. That disk doesn't
-shine steadily — its continuum flux flickers stochastically on timescales
+shine steadily: its continuum flux flickers stochastically on timescales
 of days to months, and the flickering isn't synchronized across colour:
 shorter (bluer) wavelengths vary first, and longer (redder) wavelengths
 echo them with a delay of hours to days. The standard picture is a
-**lamppost** geometry — a compact, hard X-ray/UV-emitting corona above the
+**lamppost** geometry: a compact, hard X-ray/UV-emitting corona above the
 disk irradiates it, each annulus reprocesses that irradiation and
 re-emits thermally at a wavelength set by its temperature (hotter, so
 bluer, closer in), and a cooler ring further out reprocesses more slowly,
@@ -20,18 +20,18 @@ so its light reaches the observer later. The lag between bands is
 therefore a direct, geometry-independent probe of the disk's temperature
 profile and physical size.
 
-Measuring those lags precisely — **continuum reverberation mapping** — is
+Measuring those lags precisely (**continuum reverberation mapping**) is
 one of the few ways to measure an accretion disk's size directly, rather
 than inferring it from a spectral model, and it's turned out to be a
 genuinely useful stress test for disk theory: continuum RM campaigns (e.g.
 AGN STORM, the SDSS Reverberation Mapping project) have repeatedly found
 disks several times larger than standard thin-disk theory predicts for the
-same black hole mass and accretion rate — a persistent "disk size problem"
+same black hole mass and accretion rate: a persistent "disk size problem"
 that better lag measurements, not just better spectra, can help resolve.
 
 It's a genuinely hard fitting problem, though: real light curves are noisy
 and irregularly sampled with observing gaps, and each band's flux is
-correlated red noise rather than independent points — so pairwise
+correlated red noise rather than independent points, so pairwise
 cross-correlation of light curves can be misleading, and what you really
 want is one joint statistical model of *all* bands at once that propagates
 uncertainty properly through to the physical parameters (black hole mass,
@@ -46,7 +46,7 @@ accretion rate, inclination), not just to a best-fit lag per band pair.
 - **Closed-form and differentiable.** The driving light curve is
   represented as a finite Fourier series rather than a literal Gaussian
   process, which makes the disk-reprocessing convolution analytically
-  closed-form (see "Model" below) instead of a numerical double integral —
+  closed-form (see "Model" below) instead of a numerical double integral;
   and because everything is written in JAX, gradients come for free, so
   fitting uses gradient-guided Hamiltonian Monte Carlo (NUTS) rather than a
   gradient-free sampler.
@@ -59,7 +59,7 @@ accretion rate, inclination), not just to a best-fit lag per band pair.
 
 This continues a line of continuum- and line-reverberation-mapping
 software (JAVELIN, PyROA, CREAM/MICA among others) rather than starting
-from nothing — see "Status / caveats" below for what hasn't been validated
+from nothing: see "Status / caveats" below for what hasn't been validated
 against real campaigns yet.
 
 ## Model
@@ -91,7 +91,7 @@ y_band(t) = S_band * ∫ X(t - τ) ψ(τ, λ_band, θ) dτ + C_band + ε
   function's own Fourier transform, evaluated once per driver frequency
   (`A_k = ∫ ψ cos(w_k τ) dτ`, `B_k = ∫ ψ sin(w_k τ) dτ`). Evaluating the echo
   at any set of observation times is then a single vectorised matrix
-  contraction — no loop over `(t_obs, τ)` pairs, and no loop over bands.
+  contraction: no loop over `(t_obs, τ)` pairs, and no loop over bands.
 
 Only these are inferred: `log_mdot`, `inclination`, `sigma_drw`, `tau_drw`,
 the driver Fourier coefficients `{S_k, C_k}`, and per-band `{S_band, C_band}`.
@@ -239,16 +239,16 @@ day 50, 3 weeks from day 150) to make sampling irregular/harder, closer to a
 real campaign than uniform random sampling.
 
 Writes PNGs and a `report.html` (open it to see everything in one page) to
-`smoke_test_output/`. This is a visual/eyeball check, not a pass/fail test —
+`smoke_test_output/`. This is a visual/eyeball check, not a pass/fail test;
 for that, see `tests/test_recovery.py`.
 
 ## Swapping the response function
 
 `forward_model.response_function` is the single place the physical
 (`lag_mode="physical"`, see below) response shape lives. To try a
-different parametric family, write a new function with the same signature
-— `(tau_grid, log_mdot, wavelength, inclination, M_BH, ...) -> psi`
-returning a causal, area-normalised array on `tau_grid` — and reassign it
+different parametric family, write a new function with the same signature,
+`(tau_grid, log_mdot, wavelength, inclination, M_BH, ...) -> psi`,
+returning a causal, area-normalised array on `tau_grid`, and reassign it
 at runtime: `import echofit.model as model; model.response_function =
 my_fn`, then fit as usual. That's the only place to patch: `echofit.py`'s
 plotting code reads it the same way (module-attribute access, not its own
@@ -260,7 +260,7 @@ Every band defaults to `lag_mode="physical"`: its mean lag comes from
 `lag_scaling(log_mdot, wavelength, M_BH)`, tied to every other physical
 band through the one shared `log_mdot`. Pass `lag_mode="free"` to
 `add_lightcurve()` instead for a band whose lag isn't physically tied to
-the others at all — e.g. an emission line reverberating the continuum,
+the others at all, e.g. an emission line reverberating the continuum,
 where each line's lag is its own independent quantity, not a point on a
 shared `λ^(4/3)` curve. A free-lag band gets its own inferred `tau_{name}`
 and a smoothed top-hat response (`forward_model.tophat_response_free`)
@@ -269,16 +269,16 @@ centred on it.
 **This needs a driver light curve to be identifiable.** A global shift of
 the driver, compensated by shifting every band's lag the same amount,
 leaves the predicted light curves exactly unchanged (worked through in the
-"Background" section above, and proved directly — no MCMC, no sampling
-noise — in `tests/test_shift_degeneracy.py`). The physical response
+"Background" section above, and proved directly, with no MCMC and no
+sampling noise, in `tests/test_shift_degeneracy.py`). The physical response
 escapes this because the shared `log_mdot` can only *rescale* every band's
 lag together, not shift them by a common additive amount; a free-lag
 band's `tau_{name}` has no such tie, so without an anchor the fit is
 exactly degenerate in the absolute lag origin.
 
 `add_driver_lightcurve(t, y, yerr)` registers a light curve that directly
-(zero-lag) observes the driver itself — an X-ray/lamppost continuum, or a
-directly monitored AGN continuum anchoring an emission-line fit — modelled
+(zero-lag) observes the driver itself (an X-ray/lamppost continuum, or a
+directly monitored AGN continuum anchoring an emission-line fit), modelled
 as `y(t) = S_driver * X(t) + C_driver` (its own scale/offset, no
 convolution). `EchoFit.fit()` warns if any `lag_mode="free"` band is
 registered without one:
@@ -293,7 +293,7 @@ ef.fit(num_warmup=1000, num_samples=1000)
 ```
 
 `plot_raw_lightcurves()`/`plot_lightcurve_fits()` show the driver in its
-own panel — the latter overlays the driver's own data (back-transformed
+own panel: the latter overlays the driver's own data (back-transformed
 through the posterior-mean `S_driver`/`C_driver`) on the inferred driving
 light curve panel, a direct visual check that the two agree.
 
@@ -317,7 +317,7 @@ This is a research scaffold, not a validated production pipeline:
 - On the synthetic recovery test in `tests/test_recovery.py`, `log_mdot`
   (which sets the mean lag) recovers well, but `inclination`, `sigma_drw`,
   and `tau_drw` recover only loosely (wide/biased posteriors) even with zero
-  divergent transitions — NUTS tends to spend most samples at its
+  divergent transitions: NUTS tends to spend most samples at its
   max-tree-depth ceiling on this model. Treat those three parameters'
   posteriors with extra scepticism on real data until this is investigated
   further; `EchoFit.fit()` exposes `max_tree_depth` and `chain_method` if
