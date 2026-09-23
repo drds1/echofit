@@ -93,6 +93,7 @@ ef.fit(rng_seed=0, num_warmup=500, num_samples=500)
 
 ef.plot_raw_lightcurves()
 ef.plot_lightcurve_fits()
+ef.plot_power_spectrum()
 ef.plot_mcmc_diagnostics()
 ```
 

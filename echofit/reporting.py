@@ -72,10 +72,14 @@ def generate_report(
         "power": out_dir / "power_spectrum.png",
         "diagnostics": out_dir / "mcmc_diagnostics.png",
     }
+    import matplotlib.pyplot as plt
+
     fig_raw.savefig(paths["raw"], dpi=150, bbox_inches="tight")
     fig_fits.savefig(paths["fits"], dpi=150, bbox_inches="tight")
     fig_power.savefig(paths["power"], dpi=150, bbox_inches="tight")
     fig_diag.savefig(paths["diagnostics"], dpi=150, bbox_inches="tight")
+    for fig in (fig_raw, fig_fits, fig_power, fig_diag):
+        plt.close(fig)
 
     diverging = np.asarray(ef.extra_fields.get("diverging", []))
     n_div = int(diverging.sum()) if diverging.size else 0
