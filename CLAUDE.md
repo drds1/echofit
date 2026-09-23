@@ -77,6 +77,34 @@ and package layout.
    `scripts/smoke_test.py` -- don't duplicate report-building logic back
    into either call site).
 
+7. **Free-lag bands (`lag_mode="free"`) need a driver light curve to be
+   identifiable -- this is exact, not a rule of thumb.** A global shift of
+   the driver by any Δ, compensated by shifting every band's response lag
+   by -Δ, leaves the predicted light curves *exactly* unchanged (proved
+   directly, no MCMC, in `tests/test_shift_degeneracy.py`). The physical
+   response (`lag_mode="physical"`, the default) escapes this because every
+   such band's lag is tied to one shared `log_mdot` through a fixed
+   `λ^(4/3)` scaling law -- a multiplicative rescaling of one shared
+   parameter can't mimic an additive common shift once you have 2+ bands at
+   different wavelengths. A `lag_mode="free"` band's `tau_{band}` has no
+   such tie, so the degeneracy is exact; `add_driver_lightcurve()` (a
+   direct, zero-lag `y = S_driver*X(t) + C_driver` observation of the
+   driver, via `forward_model.driver_at`) is what anchors it.
+   `EchoFit.fit()` warns (doesn't raise) if a free-lag band has no driver
+   registered.
+
+   **Gradient trap, already hit once:** `forward_model.tophat_response_free`
+   must stay a *smoothed* box (sigmoid edges), never a literal hard
+   `jnp.where(|tau - tau_mean| <= half_width, 1, 0)`. A hard top-hat has
+   **exactly zero gradient** w.r.t. `tau_mean` almost everywhere (confirmed
+   directly with `jax.grad` -- autodiff doesn't backprop through a
+   comparison's operands), so NUTS gets no signal at all to move
+   `tau_{band}` and the chain just sits near its init. This is invisible
+   from `diverging`/acceptance-rate diagnostics alone (0 divergences, looks
+   "fine") -- the tell was a posterior with essentially zero width. If you
+   add another free-form response family, check its gradient w.r.t.
+   whatever parameter NUTS samples before trusting a fit that used it.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model

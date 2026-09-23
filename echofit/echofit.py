@@ -29,7 +29,7 @@ import jax.numpy as jnp
 from . import model as _model
 from .model import reverberation_model
 from .inference import run_mcmc, run_mcmc_chunked
-from .forward_model import transfer_coeffs, compute_echo, driver_at
+from .forward_model import transfer_coeffs, compute_echo, driver_at, tophat_response_free
 from .grid_utils import estimate_dt_min
 from . import plotting
 from . import reporting
@@ -52,8 +52,12 @@ class EchoFit:
 
     Parameters
     ----------
-    M_BH : float
-        Fixed black hole mass, solar masses. Never inferred.
+    M_BH : float, optional
+        Fixed black hole mass, solar masses. Never inferred. Required only
+        if at least one band is added with ``lag_mode="physical"`` (the
+        default for ``add_lightcurve``) -- a purely free-lag fit (see
+        ``add_lightcurve``'s ``lag_mode`` and ``add_driver_lightcurve``)
+        doesn't use it and may leave it as ``None``.
     title : str, optional
         A name for this fit (e.g. an AGN name like ``"ngc_5548"``). If
         given, ``.fit()`` writes its outputs to
@@ -81,10 +85,11 @@ class EchoFit:
     >>> ef.fit()  # continues from the last checkpoint, same settings as before
     """
 
-    def __init__(self, M_BH: float, title: Optional[str] = None, output_dir: Optional[str] = None):
-        self.M_BH = float(M_BH)
+    def __init__(self, M_BH: Optional[float] = None, title: Optional[str] = None, output_dir: Optional[str] = None):
+        self.M_BH = float(M_BH) if M_BH is not None else None
         self.title = title
         self.bands: Dict[str, dict] = {}
+        self.driver_data: Optional[dict] = None
         self.freqs: Optional[np.ndarray] = None
         self.tau_grid: Optional[np.ndarray] = None
         self.mcmc = None
@@ -98,8 +103,26 @@ class EchoFit:
         self._fit_config: Optional[dict] = None
 
     # ------------------------------------------------------------------
-    def add_lightcurve(self, name: str, wavelength: float, t, y, yerr):
-        """Register a single band's (possibly irregularly sampled) light curve."""
+    def add_lightcurve(self, name: str, wavelength: float, t, y, yerr, lag_mode: str = "physical"):
+        """Register a single band's (possibly irregularly sampled) light curve.
+
+        Parameters
+        ----------
+        lag_mode : str
+            ``"physical"`` (default): mean lag comes from
+            ``lag_scaling(log_mdot, wavelength, M_BH)``, tied to every other
+            physical-mode band through the shared ``log_mdot`` -- this is
+            what breaks the driver's absolute-lag degeneracy across 2+ such
+            bands (see the model.py module docstring). ``"free"``: an
+            independently inferred ``tau_{name}``, e.g. for emission-line
+            reverberation mapping where each line's lag isn't tied to the
+            others by any shared physical parameter -- a fit with any
+            ``"free"`` band needs a driver light curve
+            (:meth:`add_driver_lightcurve`) to be identifiable; ``.fit()``
+            warns if one isn't registered.
+        """
+        if lag_mode not in ("physical", "free"):
+            raise ValueError(f"lag_mode must be 'physical' or 'free', got {lag_mode!r}")
         t, y, yerr = np.asarray(t, float), np.asarray(y, float), np.asarray(yerr, float)
         order = np.argsort(t)
         self.bands[name] = {
@@ -107,7 +130,27 @@ class EchoFit:
             "y": y[order],
             "yerr": yerr[order],
             "wavelength": float(wavelength),
+            "lag_mode": lag_mode,
         }
+        return self
+
+    # ------------------------------------------------------------------
+    def add_driver_lightcurve(self, t, y, yerr):
+        """Register a light curve that directly (zero-lag) observes the
+        driver itself -- e.g. an X-ray/lamppost continuum, or a directly
+        monitored AGN continuum anchoring an emission-line fit. Modelled as
+        ``y(t) = S_driver * X(t) + C_driver`` (own flux scale/offset, no
+        convolution) rather than an echo of ``X(t)``.
+
+        Optional for a purely ``lag_mode="physical"`` fit with 2+ bands at
+        different wavelengths (already identifiable via the shared
+        ``log_mdot``/thin-disk scaling), but it's the only thing that
+        anchors the absolute lag origin for any ``lag_mode="free"`` band --
+        see ``add_lightcurve``'s ``lag_mode``.
+        """
+        t, y, yerr = np.asarray(t, float), np.asarray(y, float), np.asarray(yerr, float)
+        order = np.argsort(t)
+        self.driver_data = {"t": t[order], "y": y[order], "yerr": yerr[order]}
         return self
 
     # ------------------------------------------------------------------
@@ -144,12 +187,13 @@ class EchoFit:
         if not self.bands:
             raise ValueError("Add at least one light curve before build_grid().")
 
-        all_t = np.concatenate([d["t"] for d in self.bands.values()])
+        all_t_arrays = [d["t"] for d in self.bands.values()]
+        if self.driver_data is not None:
+            all_t_arrays.append(self.driver_data["t"])
+        all_t = np.concatenate(all_t_arrays)
         t_span = all_t.max() - all_t.min()
         if dt_min is None:
-            dt_min = estimate_dt_min(
-                (d["t"] for d in self.bands.values()), t_span=t_span
-            )
+            dt_min = estimate_dt_min(all_t_arrays, t_span=t_span)
 
         w_min = 2.0 * np.pi / t_span
         w_max = np.pi / dt_min
@@ -168,10 +212,39 @@ class EchoFit:
                 "y": jnp.asarray(d["y"]),
                 "yerr": jnp.asarray(d["yerr"]),
                 "wavelength": d["wavelength"],
+                "lag_mode": d["lag_mode"],
             }
             for name, d in self.bands.items()
         }
-        return dict(freqs=self.freqs, tau_grid=self.tau_grid, M_BH=self.M_BH, bands=bands_jax)
+        driver_jax = None
+        if self.driver_data is not None:
+            driver_jax = {
+                "t": jnp.asarray(self.driver_data["t"]),
+                "y": jnp.asarray(self.driver_data["y"]),
+                "yerr": jnp.asarray(self.driver_data["yerr"]),
+            }
+        return dict(
+            freqs=self.freqs, tau_grid=self.tau_grid, M_BH=self.M_BH,
+            bands=bands_jax, driver=driver_jax,
+        )
+
+    def _validate_before_fit(self):
+        has_physical = any(d["lag_mode"] == "physical" for d in self.bands.values())
+        has_free = any(d["lag_mode"] == "free" for d in self.bands.values())
+        if has_physical and self.M_BH is None:
+            raise ValueError(
+                "M_BH is required when any band uses lag_mode=\"physical\" "
+                "(the default for add_lightcurve)."
+            )
+        if has_free and self.driver_data is None:
+            warnings.warn(
+                "Band(s) with lag_mode=\"free\" are registered but no driver "
+                "light curve was added via add_driver_lightcurve(). A global "
+                "shift of the driver, compensated by an equal shift of every "
+                "free-lag band's tau, leaves the likelihood unchanged -- the "
+                "absolute lag origin (and hence each such band's tau) is not "
+                "identifiable without a driver light curve to anchor it."
+            )
 
     # ------------------------------------------------------------------
     @classmethod
@@ -199,7 +272,14 @@ class EchoFit:
 
         bands = run_manager.load_bands_npz(run_dir / "data.npz")
         for name, d in bands.items():
-            ef.add_lightcurve(name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
+            ef.add_lightcurve(
+                name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"],
+                lag_mode=d["lag_mode"],
+            )
+        driver_path = run_dir / "driver.npz"
+        if driver_path.exists():
+            driver = run_manager.load_driver_npz(driver_path)
+            ef.add_driver_lightcurve(t=driver["t"], y=driver["y"], yerr=driver["yerr"])
 
         grid = run_manager.load_samples_npz(run_dir / "grid.npz")
         ef.freqs = jnp.asarray(grid["freqs"])
@@ -256,6 +336,7 @@ class EchoFit:
         """
         if self.freqs is None or self.tau_grid is None:
             self.build_grid()
+        self._validate_before_fit()
 
         if self.title is None:
             rng_seed = 0 if rng_seed is _UNSET else rng_seed
@@ -320,6 +401,8 @@ class EchoFit:
             )
             if not manifest_path.exists():
                 run_manager.save_bands_npz(self.run_dir / "data.npz", self.bands)
+                if self.driver_data is not None:
+                    run_manager.save_driver_npz(self.run_dir / "driver.npz", self.driver_data)
                 run_manager.save_samples_npz(
                     self.run_dir / "grid.npz",
                     dict(freqs=np.asarray(self.freqs), tau_grid=np.asarray(self.tau_grid)),
@@ -387,7 +470,7 @@ class EchoFit:
 
     # ------------------------------------------------------------------
     def plot_raw_lightcurves(self, **kwargs):
-        return plotting.plot_raw_lightcurves(self.bands, **kwargs)
+        return plotting.plot_raw_lightcurves(self.bands, driver=self.driver_data, **kwargs)
 
     def plot_power_spectrum(self, **kwargs):
         """Posterior driver power spectrum vs. the fitted DRW prior shape.
@@ -448,17 +531,19 @@ class EchoFit:
             all_t.min() - extrapolate_days, all_t.max() + extrapolate_days, n_fine
         )
 
-        n_total = self.samples["log_mdot"].shape[0]
+        n_total = self.samples["S"].shape[0]
         idx = np.random.default_rng(0).choice(
             n_total, size=min(n_pred_samples, n_total), replace=False
         )
 
         S = jnp.asarray(self.samples["S"])[idx]
         C = jnp.asarray(self.samples["C"])[idx]
-        log_mdot = jnp.asarray(self.samples["log_mdot"])[idx]
-        inclination = jnp.asarray(self.samples["inclination"])[idx]
+        has_physical = any(d["lag_mode"] == "physical" for d in self.bands.values())
+        if has_physical:
+            log_mdot = jnp.asarray(self.samples["log_mdot"])[idx]
+            inclination = jnp.asarray(self.samples["inclination"])[idx]
 
-        def single_draw(S_s, C_s, log_mdot_s, incl_s, wavelength, S_band_s, C_band_s):
+        def physical_draw(S_s, C_s, log_mdot_s, incl_s, wavelength, S_band_s, C_band_s):
             # Read via the model module's attribute, not a direct import of our
             # own, so that swapping model.response_function (see CLAUDE.md's
             # "swappable by contract" design decision) is reflected here too --
@@ -474,13 +559,26 @@ class EchoFit:
             y_pred = S_band_s * echo + C_band_s
             return y_pred, psi
 
+        def free_draw(S_s, C_s, tau_s, S_band_s, C_band_s):
+            psi = tophat_response_free(self.tau_grid, tau_mean=tau_s)
+            A, B = transfer_coeffs(self.tau_grid, psi, self.freqs)
+            echo = compute_echo(S_s, C_s, self.freqs, A, B, t_fine)
+            y_pred = S_band_s * echo + C_band_s
+            return y_pred, psi
+
         y_pred_samples, psi_samples = {}, {}
         for name, d in self.bands.items():
             S_band = jnp.asarray(self.samples[f"S_{name}"])[idx]
             C_band = jnp.asarray(self.samples[f"C_{name}"])[idx]
-            y_pred, psi = jax.vmap(
-                single_draw, in_axes=(0, 0, 0, 0, None, 0, 0)
-            )(S, C, log_mdot, inclination, d["wavelength"], S_band, C_band)
+            if d["lag_mode"] == "physical":
+                y_pred, psi = jax.vmap(
+                    physical_draw, in_axes=(0, 0, 0, 0, None, 0, 0)
+                )(S, C, log_mdot, inclination, d["wavelength"], S_band, C_band)
+            else:
+                tau = jnp.asarray(self.samples[f"tau_{name}"])[idx]
+                y_pred, psi = jax.vmap(
+                    free_draw, in_axes=(0, 0, 0, 0, 0)
+                )(S, C, tau, S_band, C_band)
             y_pred_samples[name] = np.asarray(y_pred)
             psi_samples[name] = np.asarray(psi)
 
@@ -488,8 +586,18 @@ class EchoFit:
             lambda S_s, C_s: driver_at(S_s, C_s, self.freqs, t_fine)
         )(S, C)
 
+        driver_points = None
+        if self.driver_data is not None:
+            S_driver = float(np.mean(self.samples["S_driver"][idx]))
+            C_driver = float(np.mean(self.samples["C_driver"][idx]))
+            driver_points = (
+                self.driver_data["t"],
+                (self.driver_data["y"] - C_driver) / S_driver,
+                self.driver_data["yerr"] / abs(S_driver),
+            )
+
         return plotting.plot_lightcurve_fits(
             self.bands, np.asarray(t_fine), y_pred_samples,
             np.asarray(self.tau_grid), psi_samples,
-            driver_samples=np.asarray(driver_samples), **kwargs,
+            driver_samples=np.asarray(driver_samples), driver_points=driver_points, **kwargs,
         )

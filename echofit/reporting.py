@@ -100,6 +100,10 @@ def _summary_table_html(ef, truth: Optional[dict]) -> str:
         if truth is not None:
             if name in truth:
                 truth_val = truth[name]
+            elif name in ("S_driver", "C_driver"):
+                truth_val = truth.get("driver", {}).get(name)
+            elif name.startswith("tau_"):
+                truth_val = truth.get("bands", {}).get(name[len("tau_"):], {}).get("tau")
             elif name.startswith(("S_", "C_")):
                 prefix, band = name.split("_", 1)
                 truth_val = truth.get("bands", {}).get(band, {}).get(f"{prefix}_band")

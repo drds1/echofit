@@ -44,6 +44,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+import jax
 import jax.numpy as jnp
 from jax.scipy.special import erf as _erf
 
@@ -145,6 +146,75 @@ def response_function(
     raw = jnp.where(tau_grid >= 0.0, raw, 0.0)
 
     area = jnp.trapezoid(raw, tau_grid) if hasattr(jnp, "trapezoid") else jnp.trapz(raw, tau_grid)
+    psi = raw / jnp.clip(area, 1e-12, None)
+    return psi
+
+
+def tophat_response_free(tau_grid, tau_mean, width_frac: float = 0.3, edge_softness_frac: float = 0.15):
+    """Causal top-hat-*like* response centred directly on ``tau_mean``, with
+    smoothed (not hard) edges -- see "Why not a literal top-hat" below.
+
+    Unlike :func:`response_function`, ``tau_mean`` is taken as given rather
+    than derived from ``lag_scaling(log_mdot, wavelength, M_BH)`` -- this is
+    the response used for a band in "free" lag mode (see
+    ``model.reverberation_model``'s ``bands[...]["lag_mode"]``), where the
+    lag itself is an independently inferred parameter rather than tied to
+    the other bands through the shared thin-disk scaling law. That
+    independence is exactly what makes a *single* such band's lag
+    unidentifiable from its light curve alone (a global shift of the driver
+    and an equal shift of the lag leave the data unchanged -- see
+    CLAUDE.md); a fit using this response for any band should also register
+    a driver light curve (:meth:`~echofit.echofit.EchoFit.add_driver_lightcurve`)
+    to anchor the absolute lag scale, or tie multiple free-lag bands
+    together some other way.
+
+    Why not a literal top-hat: a hard ``jnp.where(|tau - tau_mean| <=
+    half_width, 1, 0)`` box has **exactly zero gradient** with respect to
+    ``tau_mean`` everywhere except the measure-zero edge (autodiff doesn't
+    backprop through a comparison's operands) -- since ``tau_mean`` is a
+    ``numpyro.sample`` site here, NUTS would see zero gradient signal and
+    be unable to move it at all (confirmed directly: ``jax.grad`` of the
+    hard version w.r.t. ``tau_mean`` is identically ``0.0``). This uses a
+    sigmoid-smoothed edge instead -- still a box in the limit
+    ``edge_softness_frac -> 0``, but differentiable everywhere.
+
+    Parameters
+    ----------
+    tau_grid : array_like, shape (n_tau,)
+    tau_mean : array_like
+        The lag (days), e.g. a ``numpyro.sample`` site rather than a fixed
+        constant.
+    width_frac : float
+        Half-width as a fraction of ``tau_mean`` (fixed, not inferred --
+        matches ``response_function``'s ``width_frac`` convention). Note
+        this width-scales-with-the-lag convention means the shift
+        degeneracy above is not perfectly exact when ``tau_mean`` itself
+        changes (the width changes slightly with it, unlike a true
+        ``psi'(tau) = psi(tau + Delta)`` shift, which preserves width) --
+        see ``tests/test_shift_degeneracy.py`` for the width-independent
+        version used to verify the degeneracy claim exactly.
+    edge_softness_frac : float
+        Edge transition width as a fraction of the half-width (fixed, not
+        inferred). Smaller is closer to a true top-hat but with a narrower
+        region of usable gradient for NUTS to find the edges through.
+
+    Returns
+    -------
+    psi : array_like, shape (n_tau,)
+        Normalised response evaluated at ``tau_grid``, ~zero well outside
+        ``[tau_mean - half_width, tau_mean + half_width]`` and for tau < 0.
+    """
+    half_width = jnp.clip(width_frac * tau_mean, 1e-3, None)
+    edge_softness = jnp.clip(edge_softness_frac * half_width, 1e-3, None)
+    left_edge = tau_mean - half_width
+    right_edge = tau_mean + half_width
+    rising = jax.nn.sigmoid((tau_grid - left_edge) / edge_softness)
+    falling = jax.nn.sigmoid((right_edge - tau_grid) / edge_softness)
+    raw = rising * falling
+    raw = jnp.where(tau_grid >= 0.0, raw, 0.0)
+
+    trapz = jnp.trapezoid if hasattr(jnp, "trapezoid") else jnp.trapz
+    area = trapz(raw, tau_grid)
     psi = raw / jnp.clip(area, 1e-12, None)
     return psi
 

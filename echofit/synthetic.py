@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .forward_model import response_function, transfer_coeffs, compute_echo
+from .forward_model import response_function, tophat_response_free, transfer_coeffs, compute_echo, driver_at
 from .grid_utils import estimate_dt_min
 
 
@@ -191,3 +191,109 @@ def generate_synthetic_dataset(
     }
 
     return {"bands": out_bands, "truth": truth, "freqs": freqs, "tau_grid": tau_grid, "gaps": gaps}
+
+
+def generate_free_lag_dataset(
+    lines: Optional[Dict[str, float]] = None,
+    sigma_drw_true: float = 0.3,
+    tau_drw_true: float = 30.0,
+    t_span: float = 200.0,
+    n_obs_per_line: int = 40,
+    n_obs_driver: int = 80,
+    include_driver: bool = True,
+    n_freq: int = 40,
+    n_tau: int = 300,
+    tau_max: float = 60.0,
+    noise_level: float = 0.05,
+    seed: int = 0,
+) -> dict:
+    """Synthetic dataset with independent, not-physically-tied per-band lags
+    (e.g. emission lines), and optionally a driver light curve -- the
+    "free"-lag-mode counterpart to :func:`generate_synthetic_dataset`, for
+    testing/demonstrating the identifiability point in ``model.py``'s module
+    docstring: a driver light curve is essentially required to pin down
+    these lags' absolute scale.
+
+    Parameters
+    ----------
+    lines : dict, optional
+        Mapping ``line_name -> true_lag_days``. Defaults to three lines at
+        8, 15, and 22 days.
+    include_driver : bool
+        Whether to also generate a direct (zero-lag) driver light curve.
+        Set ``False`` to generate a deliberately-unidentifiable dataset
+        (see the module docstring / ``tests/test_response_function_swap.py``
+        for what "unidentifiable" looks like in practice here).
+    n_obs_driver : int
+        Observation count for the driver light curve (only used if
+        ``include_driver``).
+    Other parameters mirror :func:`generate_synthetic_dataset`.
+
+    Returns
+    -------
+    data : dict
+        ``{"bands": {name: {"t", "y", "yerr", "wavelength"}}, "driver":
+        {"t", "y", "yerr"} or None, "truth": {...}, "freqs": array,
+        "tau_grid": array}``. Each band's ``"wavelength"`` is just an
+        arbitrary increasing placeholder (for plot ordering/colour only --
+        it plays no role in a free-lag band's model).
+    """
+    rng = np.random.default_rng(seed)
+
+    if lines is None:
+        lines = {"line_a": 8.0, "line_b": 15.0, "line_c": 22.0}
+
+    t_by_series = {}
+    if include_driver:
+        t_by_series["__driver__"] = np.sort(rng.uniform(0.0, t_span, size=n_obs_driver))
+    for name in lines:
+        t_by_series[name] = np.sort(rng.uniform(0.0, t_span, size=n_obs_per_line))
+
+    dt_min = estimate_dt_min(t_by_series.values(), t_span=t_span)
+    freqs = make_frequency_grid(n_freq, t_span, dt_min)
+    tau_grid = np.linspace(0.0, tau_max, n_tau)
+
+    dw = np.gradient(freqs)
+    power = sigma_drw_true ** 2 * tau_drw_true / (1.0 + (freqs * tau_drw_true) ** 2)
+    amp_scale = np.sqrt(power * np.clip(dw, 1e-8, None))
+    S_true = rng.normal(0.0, amp_scale)
+    C_true = rng.normal(0.0, amp_scale)
+
+    out_bands = {}
+    per_band_truth = {}
+    for i, (name, tau_true) in enumerate(sorted(lines.items(), key=lambda kv: kv[1])):
+        t = t_by_series[name]
+        psi = np.asarray(tophat_response_free(tau_grid, tau_mean=tau_true))
+        A, B = transfer_coeffs(tau_grid, psi, freqs)
+        echo = np.asarray(compute_echo(S_true, C_true, freqs, np.asarray(A), np.asarray(B), t))
+
+        S_band_true = rng.uniform(0.8, 1.5)
+        C_band_true = rng.uniform(-0.5, 0.5)
+        y_clean = S_band_true * echo + C_band_true
+
+        yerr = np.full_like(y_clean, noise_level * (np.std(y_clean) + 1e-3))
+        y = y_clean + rng.normal(0.0, yerr)
+
+        out_bands[name] = {
+            "t": t, "y": y, "yerr": yerr,
+            "wavelength": 4000.0 + 500.0 * i,  # placeholder, for plot ordering only
+        }
+        per_band_truth[name] = {"S_band": S_band_true, "C_band": C_band_true, "tau": tau_true}
+
+    driver_out, driver_truth = None, None
+    if include_driver:
+        t_d = t_by_series["__driver__"]
+        X_d = np.asarray(driver_at(S_true, C_true, freqs, t_d))
+        S_driver_true = rng.uniform(0.8, 1.5)
+        C_driver_true = rng.uniform(-0.5, 0.5)
+        y_d_clean = S_driver_true * X_d + C_driver_true
+        yerr_d = np.full_like(y_d_clean, noise_level * (np.std(y_d_clean) + 1e-3))
+        y_d = y_d_clean + rng.normal(0.0, yerr_d)
+        driver_out = {"t": t_d, "y": y_d, "yerr": yerr_d}
+        driver_truth = {"S_driver": S_driver_true, "C_driver": C_driver_true}
+
+    truth = {
+        "sigma_drw": sigma_drw_true, "tau_drw": tau_drw_true,
+        "S": S_true, "C": C_true, "bands": per_band_truth, "driver": driver_truth,
+    }
+    return {"bands": out_bands, "driver": driver_out, "truth": truth, "freqs": freqs, "tau_grid": tau_grid}
