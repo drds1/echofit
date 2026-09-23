@@ -103,3 +103,18 @@ def test_resume_continues_an_interrupted_fit(tmp_path, monkeypatch):
     assert not np.array_equal(
         final_checkpoint["log_mdot"][:20], final_checkpoint["log_mdot"][20:40]
     )
+
+
+def test_resume_of_already_complete_run_is_a_no_op(tmp_path):
+    """Regression test: resuming a run that already reached its target
+    sample count used to crash (run_mcmc_chunked indexed into an empty
+    chunk list) instead of being a harmless no-op."""
+    data = _make_synthetic()
+    ef = _build_echofit(data, title="complete_run", output_dir=str(tmp_path))
+    ef.fit(rng_seed=0, num_warmup=15, num_samples=20, checkpoint_every=20, progress_bar=False)
+    assert len(ef.samples["log_mdot"]) == 20
+
+    ef2 = EchoFit.resume("complete_run", output_dir=str(tmp_path))
+    ef2.fit(progress_bar=False)
+    assert len(ef2.samples["log_mdot"]) == 20
+    np.testing.assert_array_equal(ef.samples["log_mdot"], ef2.samples["log_mdot"])

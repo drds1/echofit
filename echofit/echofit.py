@@ -302,10 +302,14 @@ class EchoFit:
             prev_samples = self._resume_state["samples"]
             prev_extra = self._resume_state["extra_fields"]
             n_already_done = self._resume_state["n_done"]
-            print(
-                f"Resuming '{self.title}' from {self.run_dir} "
-                f"({n_already_done}/{num_samples} samples already collected)."
-            )
+            if n_already_done >= num_samples:
+                print(f"'{self.title}' at {self.run_dir} is already complete "
+                      f"({n_already_done}/{num_samples} samples) -- nothing to resume.")
+            else:
+                print(
+                    f"Resuming '{self.title}' from {self.run_dir} "
+                    f"({n_already_done}/{num_samples} samples already collected)."
+                )
         else:
             init_last_state = None
             prev_samples, prev_extra, n_already_done = {}, {}, 0

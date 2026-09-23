@@ -124,6 +124,11 @@ def run_mcmc_chunked(
     n_done = n_already_done
     samples_chunks, samples_by_chain_chunks, extra_chunks = [], [], []
 
+    if n_done >= num_samples:
+        # Already fully sampled (e.g. resuming a run that had already
+        # completed) -- nothing left to do.
+        return {}, {}, {}, last_state
+
     while n_done < num_samples:
         this_chunk = min(checkpoint_every, num_samples - n_done)
         kernel = _build_kernel(model, target_accept_prob, max_tree_depth)
