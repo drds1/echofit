@@ -93,6 +93,8 @@ and package layout.
 pip install -e ".[dev]"
 pytest                      # forward-model unit tests + end-to-end MCMC
                              # recovery test (tests/test_recovery.py, ~1-2 min)
+python scripts/smoke_test.py  # quick visual check: fit + save plots to
+                               # smoke_test_output/report.html (~30-50s)
 jupyter notebook notebooks/demo.ipynb
 ```
 

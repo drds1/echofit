@@ -54,6 +54,8 @@ echofit/
     synthetic.py          generate_synthetic_dataset for tests / the demo notebook
 notebooks/
     demo.ipynb            end-to-end synthetic-data demo
+scripts/
+    smoke_test.py          quick visual sanity check (see below)
 tests/
     test_forward_model.py  basic sanity checks on the forward model
     test_recovery.py       end-to-end MCMC recovery test on synthetic data
@@ -88,6 +90,21 @@ ef.plot_mcmc_diagnostics()
 ```
 
 See `notebooks/demo.ipynb` for the full walkthrough.
+
+## Visual smoke test
+
+For a quick "did I break anything" check after touching `forward_model.py`,
+`model.py`, or `echofit.py`, run a short fit on synthetic data and save plots
+of the raw data, the posterior-predictive fit, and MCMC trace diagnostics:
+
+```bash
+python scripts/smoke_test.py                # ~30-50s, 300 warmup + 300 samples
+python scripts/smoke_test.py --num-warmup 100 --num-samples 100   # faster, noisier
+```
+
+Writes PNGs and a `report.html` (open it to see everything in one page) to
+`smoke_test_output/`. This is a visual/eyeball check, not a pass/fail test —
+for that, see `tests/test_recovery.py`.
 
 ## Swapping the response function
 
