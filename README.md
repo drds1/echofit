@@ -4,6 +4,64 @@ Bayesian modelling of AGN reverberation-mapping light curves as a delayed,
 smoothed echo of an unobserved driving (lamppost) X-ray light curve, built on
 [JAX](https://github.com/google/jax) + [NumPyro](https://num.pyro.ai/).
 
+## Background
+
+Active galactic nuclei (AGN) are powered by gas accreting onto a
+supermassive black hole through a hot, luminous disk. That disk doesn't
+shine steadily — its continuum flux flickers stochastically on timescales
+of days to months, and the flickering isn't synchronized across colour:
+shorter (bluer) wavelengths vary first, and longer (redder) wavelengths
+echo them with a delay of hours to days. The standard picture is a
+**lamppost** geometry — a compact, hard X-ray/UV-emitting corona above the
+disk irradiates it, each annulus reprocesses that irradiation and
+re-emits thermally at a wavelength set by its temperature (hotter, so
+bluer, closer in), and a cooler ring further out reprocesses more slowly,
+so its light reaches the observer later. The lag between bands is
+therefore a direct, geometry-independent probe of the disk's temperature
+profile and physical size.
+
+Measuring those lags precisely — **continuum reverberation mapping** — is
+one of the few ways to measure an accretion disk's size directly, rather
+than inferring it from a spectral model, and it's turned out to be a
+genuinely useful stress test for disk theory: continuum RM campaigns (e.g.
+AGN STORM, the SDSS Reverberation Mapping project) have repeatedly found
+disks several times larger than standard thin-disk theory predicts for the
+same black hole mass and accretion rate — a persistent "disk size problem"
+that better lag measurements, not just better spectra, can help resolve.
+
+It's a genuinely hard fitting problem, though: real light curves are noisy
+and irregularly sampled with observing gaps, and each band's flux is
+correlated red noise rather than independent points — so pairwise
+cross-correlation of light curves can be misleading, and what you really
+want is one joint statistical model of *all* bands at once that propagates
+uncertainty properly through to the physical parameters (black hole mass,
+accretion rate, inclination), not just to a best-fit lag per band pair.
+
+`echofit` is a specific, opinionated take on that joint fit:
+
+- **Fully Bayesian, one model, every band at once.** A single NumPyro model
+  jointly infers the shared driving light curve, the disk response per
+  band, and the physical parameters behind it, rather than fitting each
+  band's lag independently and combining the results afterwards.
+- **Closed-form and differentiable.** The driving light curve is
+  represented as a finite Fourier series rather than a literal Gaussian
+  process, which makes the disk-reprocessing convolution analytically
+  closed-form (see "Model" below) instead of a numerical double integral —
+  and because everything is written in JAX, gradients come for free, so
+  fitting uses gradient-guided Hamiltonian Monte Carlo (NUTS) rather than a
+  gradient-free sampler.
+- **Built for running a campaign, not just a demo script.** Managed,
+  resumable fit runs (`EchoFit(title=...)`, checkpointing,
+  `EchoFit.resume()`) and a one-command visual sanity-check report
+  (`scripts/smoke_test.py`), because real fitting campaigns get
+  interrupted midway and real results need to be eyeballed before they're
+  trusted, not just produced.
+
+This continues a line of continuum- and line-reverberation-mapping
+software (JAVELIN, PyROA, CREAM/MICA among others) rather than starting
+from nothing — see "Status / caveats" below for what hasn't been validated
+against real campaigns yet.
+
 ## Model
 
 Each band's observed light curve is modelled as
