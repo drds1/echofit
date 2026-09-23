@@ -2,7 +2,7 @@
 run_manager.py
 ===============
 
-Filesystem layout and serialization helpers behind ``EchoFit(title=...)``'s
+Filesystem layout and serialisation helpers behind ``EchoFit(title=...)``'s
 on-disk run outputs::
 
     <output_root>/<title>/run_<YYYYMMDD_HHMMSS>/
@@ -88,7 +88,7 @@ def _json_default(o):
         return float(o)
     if isinstance(o, np.ndarray):
         return o.tolist()
-    raise TypeError(f"Not JSON serializable: {type(o)}")
+    raise TypeError(f"Not JSON serialisable: {type(o)}")
 
 
 def save_json(path, obj: dict):

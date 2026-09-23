@@ -25,7 +25,7 @@ def test_lag_scaling_increases_with_mdot():
     assert tau_high > tau_low
 
 
-def test_response_function_is_causal_and_normalized():
+def test_response_function_is_causal_and_normalised():
     tau_grid = jnp.linspace(-5.0, 60.0, 500)
     psi = response_function(
         tau_grid, log_mdot=0.0, wavelength=5000.0, inclination=30.0, M_BH=1e8

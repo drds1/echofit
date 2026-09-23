@@ -23,14 +23,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def _band_colors(bands: Dict[str, dict]):
-    """Consistent color per band, ordered and colored by wavelength."""
+def _band_colours(bands: Dict[str, dict]):
+    """Consistent colour per band, ordered and coloured by wavelength."""
     ordered = sorted(bands.items(), key=lambda kv: kv[1]["wavelength"])
     wavelengths = np.array([d["wavelength"] for _, d in ordered])
     norm = plt.Normalize(wavelengths.min(), wavelengths.max())
     cmap = plt.get_cmap("plasma_r")
-    colors = {name: cmap(norm(d["wavelength"])) for name, d in ordered}
-    return ordered, colors
+    colours = {name: cmap(norm(d["wavelength"])) for name, d in ordered}
+    return ordered, colours
 
 
 def plot_raw_lightcurves(bands: Dict[str, dict], figsize_per_panel=(7, 1.8)):
@@ -41,7 +41,7 @@ def plot_raw_lightcurves(bands: Dict[str, dict], figsize_per_panel=(7, 1.8)):
     bands : dict
         ``{band_name: {"t", "y", "yerr", "wavelength"}}``.
     """
-    ordered, colors = _band_colors(bands)
+    ordered, colours = _band_colours(bands)
     n = len(ordered)
     fig, axes = plt.subplots(
         n, 1, figsize=(figsize_per_panel[0], figsize_per_panel[1] * n), sharex=True
@@ -51,8 +51,8 @@ def plot_raw_lightcurves(bands: Dict[str, dict], figsize_per_panel=(7, 1.8)):
 
     for ax, (name, d) in zip(axes, ordered):
         ax.errorbar(
-            d["t"], d["y"], yerr=d["yerr"], fmt="o", ms=4, color=colors[name],
-            ecolor=colors[name], alpha=0.85, capsize=3, elinewidth=1.2, capthick=1.2,
+            d["t"], d["y"], yerr=d["yerr"], fmt="o", ms=4, color=colours[name],
+            ecolor=colours[name], alpha=0.85, capsize=3, elinewidth=1.2, capthick=1.2,
         )
         ax.set_ylabel(f"{name}\n({d['wavelength']:.0f} \u00c5)")
         ax.grid(alpha=0.25)
@@ -97,7 +97,7 @@ def plot_lightcurve_fits(
         per-band rows, sharing the same time axis so lags between the
         driver and each band's echo are visually alignable.
     """
-    ordered, colors = _band_colors(bands)
+    ordered, colours = _band_colours(bands)
     n = len(ordered)
     has_driver = driver_samples is not None
     n_rows = n + (1 if has_driver else 0)
@@ -123,14 +123,14 @@ def plot_lightcurve_fits(
 
     for row, (name, d) in enumerate(ordered):
         ax_lc, ax_psi = axes[row + has_driver, 0], axes[row + has_driver, 1]
-        color = colors[name]
+        colour = colours[name]
 
         preds = y_pred_samples[name]
         lo95, lo68, med, hi68, hi95 = np.percentile(preds, [2.5, 16, 50, 84, 97.5], axis=0)
 
-        ax_lc.fill_between(t_fine, lo95, hi95, color=color, alpha=0.15, label="95% CI")
-        ax_lc.fill_between(t_fine, lo68, hi68, color=color, alpha=0.35, label="68% CI")
-        ax_lc.plot(t_fine, med, color=color, lw=1.5, label="posterior median")
+        ax_lc.fill_between(t_fine, lo95, hi95, color=colour, alpha=0.15, label="95% CI")
+        ax_lc.fill_between(t_fine, lo68, hi68, color=colour, alpha=0.35, label="68% CI")
+        ax_lc.plot(t_fine, med, color=colour, lw=1.5, label="posterior median")
         ax_lc.errorbar(
             d["t"], d["y"], yerr=d["yerr"], fmt="o", ms=4, color="k",
             ecolor="k", alpha=0.7, capsize=3, elinewidth=1.2, capthick=1.2, label="data",
@@ -142,9 +142,9 @@ def plot_lightcurve_fits(
 
         psis = psi_samples[name]
         plo95, plo68, pmed, phi68, phi95 = np.percentile(psis, [2.5, 16, 50, 84, 97.5], axis=0)
-        ax_psi.fill_between(tau_grid, plo95, phi95, color=color, alpha=0.15)
-        ax_psi.fill_between(tau_grid, plo68, phi68, color=color, alpha=0.35)
-        ax_psi.plot(tau_grid, pmed, color=color, lw=1.5)
+        ax_psi.fill_between(tau_grid, plo95, phi95, color=colour, alpha=0.15)
+        ax_psi.fill_between(tau_grid, plo68, phi68, color=colour, alpha=0.35)
+        ax_psi.plot(tau_grid, pmed, color=colour, lw=1.5)
         ax_psi.set_ylabel(r"$\psi(\tau)$")
         ax_psi.grid(alpha=0.25)
 
@@ -171,7 +171,7 @@ def plot_power_spectrum(
     ``Var(S_k) = Var(C_k) = power(w_k) * dw_k`` in the first place, so this
     is directly comparable to the Lorentzian ``power(w)`` curve overlaid
     from the same posterior draws' ``sigma_drw``/``tau_drw``. Since ``freqs``
-    is log-spaced (geomspace), skipping the ``dw_k`` normalization would
+    is log-spaced (geomspace), skipping the ``dw_k`` normalisation would
     flatten the apparent log-log slope purely from the growing bin width at
     high frequency -- not a real physical effect.
 
@@ -241,7 +241,7 @@ def plot_mcmc_diagnostics(
         ``mcmc.get_samples(group_by_chain=True)`` output, i.e.
         ``{name: array of shape (n_chains, n_samples, ...)}``. Non-scalar
         (vector) sites -- e.g. the per-frequency driver coefficients ``S``,
-        ``C`` -- are summarized by their mean across the vector dimension
+        ``C`` -- are summarised by their mean across the vector dimension
         so the figure stays readable.
     param_names : sequence of str, optional
         Restrict to these parameter names; defaults to all scalar-friendly

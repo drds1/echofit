@@ -32,7 +32,7 @@ This avoids ever looping over observation times and tau jointly (an
 O(n_obs * n_tau) operation); instead the expensive tau-integral is done once
 per frequency (O(n_freq * n_tau)) to get (A_k, B_k), and then the echo at any
 set of times is a single O(n_obs * n_freq) matrix contraction. Everything is
-written with ``jax.numpy`` so it vectorizes and is differentiable / jittable
+written with ``jax.numpy`` so it vectorises and is differentiable / jittable
 end to end, which is what NumPyro's NUTS sampler needs.
 
 The response function is intentionally isolated in ``response_function`` so
@@ -51,7 +51,7 @@ from jax.scipy.special import erf as _erf
 # Pivot / calibration constants for the lag-scaling law.
 # These set the overall day-scale and are not inferred.
 # ----------------------------------------------------------------------
-TAU0_DAYS = 1.0          # normalization: lag (days) at the pivot point below
+TAU0_DAYS = 1.0          # normalisation: lag (days) at the pivot point below
 M_BH_PIVOT = 1.0e8       # pivot black hole mass, solar masses
 MDOT_PIVOT = 1.0         # pivot dimensionless accretion rate (10**log_mdot)
 LAMBDA_PIVOT = 5000.0    # pivot wavelength, Angstrom
@@ -90,7 +90,7 @@ def lag_scaling(log_mdot, wavelength, M_BH):
 
 
 def _skew_normal_pdf(x, loc, scale, alpha):
-    """Standard skew-normal pdf (unnormalized area beyond truncation)."""
+    """Standard skew-normal pdf (unnormalised area beyond truncation)."""
     z = (x - loc) / scale
     phi = jnp.exp(-0.5 * z ** 2) / jnp.sqrt(2.0 * jnp.pi)
     Phi = 0.5 * (1.0 + _erf(alpha * z / jnp.sqrt(2.0)))
@@ -109,7 +109,7 @@ def response_function(
 ):
     """Causal, positive transfer function psi(tau, lambda; theta).
 
-    A skew-normal response, truncated to tau >= 0 and re-normalized on the
+    A skew-normal response, truncated to tau >= 0 and re-normalised on the
     supplied ``tau_grid`` so that ``trapz(psi, tau_grid) == 1``. The mean lag
     is set purely by :func:`lag_scaling` (accretion rate, wavelength, fixed
     mass). Inclination controls only the *skewness*, not the mean lag, per
@@ -119,7 +119,7 @@ def response_function(
     Parameters
     ----------
     tau_grid : array_like, shape (n_tau,)
-        Non-negative lag grid (days) the response is evaluated / normalized
+        Non-negative lag grid (days) the response is evaluated / normalised
         on.
     log_mdot, wavelength, inclination : array_like
         Physical parameters. ``inclination`` in degrees, 0 = face-on.
@@ -135,7 +135,7 @@ def response_function(
     Returns
     -------
     psi : array_like, shape (n_tau,)
-        Normalized response evaluated at ``tau_grid``, zero for tau < 0.
+        Normalised response evaluated at ``tau_grid``, zero for tau < 0.
     """
     tau_mean = lag_scaling(log_mdot, wavelength, M_BH)
     scale = jnp.clip(width_frac * tau_mean, 1e-3, None)

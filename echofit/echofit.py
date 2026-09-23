@@ -59,7 +59,7 @@ class EchoFit:
         ``<output_root>/<title>/run_<timestamp>/`` -- see
         :func:`~echofit.run_manager.resolve_output_root`. If omitted,
         nothing is written to disk (the original, fully in-memory
-        behavior).
+        behaviour).
     output_dir : str, optional
         Override the output root directory. Only relevant when ``title``
         is given. Otherwise resolved from the ``ECHOFIT_OUTPUT_DIR``
@@ -236,7 +236,7 @@ class EchoFit:
         """Run NUTS and store the posterior samples on ``self.samples``.
 
         If this instance has no ``title``, this is a single non-resumable
-        in-memory run (the original behavior) -- ``num_chains``/
+        in-memory run (the original behaviour) -- ``num_chains``/
         ``chain_method`` apply normally.
 
         If ``title`` was given (directly, or via ``.resume()``), this
@@ -426,7 +426,7 @@ class EchoFit:
         """Draw posterior-predictive light curves and response functions.
 
         Subsamples up to ``n_pred_samples`` posterior draws for speed, and
-        evaluates them (vectorized with ``jax.vmap``) on a dense time grid
+        evaluates them (vectorised with ``jax.vmap``) on a dense time grid
         per band plus the shared lag grid. This all happens *after* ``.fit()``
         -- extending ``extrapolate_days`` does not slow down NUTS, only the
         (cheap, matrix-multiply) posterior-predictive evaluation here.

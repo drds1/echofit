@@ -39,7 +39,7 @@ def drw_prior_scale(freqs: jnp.ndarray, sigma_drw, tau_drw) -> jnp.ndarray:
 
         P(w) = sigma_drw**2 * tau_drw / (1 + (w * tau_drw)**2)
 
-    Discretizing onto the fixed frequency grid ``freqs`` with local spacing
+    Discretising onto the fixed frequency grid ``freqs`` with local spacing
     ``dw_k``, the implied standard deviation of each independent
     sine/cosine amplitude is ``sqrt(P(w_k) * dw_k)``. This turns the
     "arbitrary sinusoids" driver into a proper (approximate) DRW Gaussian
@@ -66,7 +66,7 @@ def reverberation_model(
     freqs : (n_freq,) array
         Fixed grid of driver angular frequencies (rad/day).
     tau_grid : (n_tau,) array
-        Fixed grid of lags (days) used to evaluate/normalize psi and its
+        Fixed grid of lags (days) used to evaluate/normalise psi and its
         Fourier transform.
     M_BH : float
         Fixed black hole mass (solar masses). Not inferred.
@@ -81,9 +81,9 @@ def reverberation_model(
     prior_scale = drw_prior_scale(freqs, sigma_drw, tau_drw)
     n_freq = freqs.shape[0]
 
-    # Non-centered parameterization: S, C's scale is itself a sampled
+    # Non-centred parameterisation: S, C's scale is itself a sampled
     # hyperparameter (via prior_scale(sigma_drw, tau_drw)), which produces
-    # a Neal's-funnel geometry if sampled directly ("centered") -- NUTS then
+    # a Neal's-funnel geometry if sampled directly ("centred") -- NUTS then
     # can't find one step size that works both where prior_scale is small
     # and where it's large, and every trajectory runs to max tree depth.
     # Sampling unit-scale S_raw/C_raw and pushing the hyperparameter

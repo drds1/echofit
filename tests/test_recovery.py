@@ -4,7 +4,7 @@ the full NUTS pipeline (EchoFit.fit), and check the posterior is actually
 consistent with the injected ground truth.
 
 This is deliberately more than a "does it crash" smoke test -- it checks:
-  * no divergent transitions (a red flag for a badly parameterized model
+  * no divergent transitions (a red flag for a badly parameterised model
     or a mismatched frequency grid -- see grid_utils.estimate_dt_min),
   * the well-identified parameter (log_mdot, which sets the mean lag) is
     recovered close to truth,
