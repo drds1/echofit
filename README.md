@@ -122,10 +122,14 @@ echofit/
     synthetic.py          generate_synthetic_dataset (physical bands) and
                           generate_free_lag_dataset (free-lag bands + driver)
                           for tests / the demo notebook
+docs/
+    thin_disk_response.md  how thin_disk_response is computed, with
+                          scaling-law verification charts
 notebooks/
     demo.ipynb            end-to-end synthetic-data demo
 scripts/
     smoke_test.py          quick visual sanity check (see below)
+    plot_thin_disk_response_scalings.py  regenerates docs/thin_disk_response.md's charts
 tests/
     test_forward_model.py  basic sanity checks on the forward model
     test_recovery.py       end-to-end MCMC recovery test on synthetic data
@@ -359,6 +363,13 @@ on `tau_grid`. Two are built in:
 
   model.response_function = get_response("thin_disk")
   ```
+
+  See [`docs/thin_disk_response.md`](docs/thin_disk_response.md) for
+  exactly how this is computed (temperature profile, delay surface,
+  response weighting, and why it's a deterministic quadrature rather than
+  the Fortran's Monte Carlo), plus charts verifying that inclination
+  reshapes the response without moving its mean lag, and that the mean lag
+  scales with accretion rate the way thin-disk theory predicts.
 
 `echofit.responses.register_response(name, fn)` registers your own
 response under a name for `get_response` to find; `available_responses()`

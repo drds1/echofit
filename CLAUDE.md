@@ -136,6 +136,14 @@ and package layout.
      radius/azimuth integral) versus the skew-normal's closed form, so it's
      an optional, heavier alternative -- not a default-swap candidate for
      routine fits without checking the cost is acceptable.
+   - `n_r`/`n_phi` default to 50/64, not something smaller -- an earlier
+     40/24 default looked fine on the causality/normalisation/gradient
+     tests (none of which check smoothness) but produced a visibly jagged,
+     under-converged psi once actually plotted for `docs/thin_disk_response.md`
+     (each radius only contributing 24 distinct azimuth samples). Confirmed
+     by comparing 40x24/50x64/60x120 side by side: 50x64 is already
+     converged onto the same curve as 60x120. Don't drop below ~50x64
+     without re-checking a plotted psi, not just the numeric tests.
 
 ## Known rough edges / things to check before trusting results on real data
 

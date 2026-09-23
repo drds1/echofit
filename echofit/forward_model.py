@@ -250,8 +250,8 @@ def thin_disk_response(
     include_irradiation: bool = False,
     irradiation_slope: float = 0.75,
     irradiation_weight: float = 0.5,
-    n_r: int = 40,
-    n_phi: int = 24,
+    n_r: int = 50,
+    n_phi: int = 64,
     smoothing_days: float | None = None,
 ):
     """Causal, area-normalised transfer function from thin-disk reprocessing

@@ -1,0 +1,133 @@
+"""
+plot_thin_disk_response_scalings.py
+====================================
+
+Generates the two figures used in docs/thin_disk_response.md: a case-study
+accretion disk's response function ``forward_model.thin_disk_response``
+evaluated (a) at fixed accretion rate for a range of inclinations, and
+(b) face-on for a range of accretion rates, each with a vertical line at
+the response's own (numerically integrated) mean lag.
+
+This is a documentation/figure-generation script, not a test -- run it
+directly to regenerate the PNGs under docs/images/ if thin_disk_response's
+physics or default parameters ever change:
+
+    poetry run python scripts/plot_thin_disk_response_scalings.py
+"""
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+from echofit.forward_model import thin_disk_response
+
+_np_trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+
+OUT_DIR = "docs/images"
+
+# Case-study disk: same M_BH/wavelength pivot used throughout the test
+# suite, so the lags below line up with what CLAUDE.md/README already
+# describe.
+M_BH = 1.0e8       # solar masses
+WAVELENGTH = 5000.0  # Angstrom
+
+# thin_disk_response's own fitting defaults (n_r=50, n_phi=64) are already
+# a step up from an initial 40x24 default that looked fine on the unit
+# tests but was visibly under-converged once plotted (see CLAUDE.md design
+# decision #8) -- for these illustration figures, quality matters more
+# than per-evaluation speed, so use a higher resolution still, especially
+# for n_r: at inclination=0 the delay surface has *no* azimuthal dependence
+# (tau(r, phi) = r for every phi), so n_phi cannot smooth a face-on curve
+# at all, only n_r can; and the radial grid is log-spaced, so at high mdot
+# (where the response sits at large r, out where log-spacing is coarsest
+# in absolute terms) it takes a substantially larger n_r to resolve the
+# response as smoothly as at low mdot -- confirmed by comparing n_r in
+# {150, 400, 800} at log_mdot=1.0: 400 already matches 800.
+PLOT_N_R = 400
+PLOT_N_PHI = 96
+
+
+def _mean_lag(tau_grid, psi):
+    """Numerically integrated mean lag of a response, int psi*tau dtau."""
+    return float(_np_trapz(np.asarray(psi) * np.asarray(tau_grid), np.asarray(tau_grid)))
+
+
+def plot_inclination_sweep():
+    """Fixed accretion rate, varying inclination -- the mean lag should be
+    (numerically) the same for every curve, since the disk's iso-delay
+    surface reshapes the response's skew without changing its mean:
+    int_0^2pi (1 + sin(i) cos(phi)) dphi = 2*pi for any inclination i, the
+    cos(phi) term integrating to zero. Inclination changes the *shape*, not
+    the *mean*."""
+    tau_grid = np.linspace(-2.0, 15.0, 600)
+    inclinations = [0.0, 20.0, 40.0, 60.0, 80.0]
+
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    colours = plt.cm.viridis(np.linspace(0.15, 0.9, len(inclinations)))
+    for inclination, colour in zip(inclinations, colours):
+        psi = thin_disk_response(
+            tau_grid, log_mdot=0.0, wavelength=WAVELENGTH,
+            inclination=inclination, M_BH=M_BH,
+            n_r=PLOT_N_R, n_phi=PLOT_N_PHI,
+        )
+        mean_lag = _mean_lag(tau_grid, psi)
+        ax.plot(tau_grid, psi, color=colour, label=f"inclination={inclination:.0f} deg")
+        ax.axvline(mean_lag, color=colour, linestyle="--", linewidth=1, alpha=0.8)
+
+    ax.set_xlabel("lag, tau (days)")
+    ax.set_ylabel("psi(tau)")
+    ax.set_title(
+        f"Fixed log_mdot=0 (M_BH={M_BH:.0e} Msun, lambda={WAVELENGTH:.0f} A),\n"
+        "varying inclination -- dashed lines are each curve's own mean lag",
+        fontsize=11,
+    )
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(f"{OUT_DIR}/thin_disk_response_inclination_sweep.png", dpi=150)
+    plt.close(fig)
+
+
+def plot_mdot_sweep():
+    """Face-on (inclination=0), varying accretion rate -- the mean lag
+    should scale as mdot**(1/3) (lag_scaling's own scaling law, at fixed
+    M_BH and wavelength), which is exactly what the vertical lines are
+    here to make visible."""
+    tau_grid = np.linspace(-2.0, 12.0, 600)
+    log_mdots = [-1.0, -0.5, 0.0, 0.5, 1.0]
+
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    colours = plt.cm.plasma(np.linspace(0.15, 0.85, len(log_mdots)))
+    for log_mdot, colour in zip(log_mdots, colours):
+        psi = thin_disk_response(
+            tau_grid, log_mdot=log_mdot, wavelength=WAVELENGTH,
+            inclination=0.0, M_BH=M_BH,
+            n_r=PLOT_N_R, n_phi=PLOT_N_PHI,
+        )
+        mean_lag = _mean_lag(tau_grid, psi)
+        mdot = 10.0 ** log_mdot
+        ax.plot(tau_grid, psi, color=colour, label=f"mdot={mdot:.2f} (log_mdot={log_mdot:+.1f})")
+        ax.axvline(mean_lag, color=colour, linestyle="--", linewidth=1, alpha=0.8)
+
+    ax.set_xlabel("lag, tau (days)")
+    ax.set_ylabel("psi(tau)")
+    ax.set_title(
+        f"Face-on (inclination=0 deg, M_BH={M_BH:.0e} Msun, lambda={WAVELENGTH:.0f} A),\n"
+        "varying mdot -- dashed lines are each curve's own mean lag, scaling as mdot**(1/3)",
+        fontsize=11,
+    )
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(f"{OUT_DIR}/thin_disk_response_mdot_sweep.png", dpi=150)
+    plt.close(fig)
+
+
+if __name__ == "__main__":
+    import os
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    plot_inclination_sweep()
+    plot_mdot_sweep()
+    print(f"Wrote figures to {OUT_DIR}/")
