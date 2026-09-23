@@ -137,12 +137,96 @@ tests/
 
 ## Install
 
+The steps below assume nothing is already set up beyond a normal Linux (or
+macOS) shell: no Python environment, no Poetry, nothing. If you already
+have both, skip to step 3.
+
+### 1. Check you have Python 3.10 or newer
+
+```bash
+python3 --version
+```
+
+If that prints `Python 3.10.x` or higher, move on to step 2. If `python3`
+isn't found, or the version is older than 3.10, install one with your
+distribution's package manager:
+
+```bash
+# Debian / Ubuntu
+sudo apt update && sudo apt install python3 python3-venv
+
+# Fedora / RHEL
+sudo dnf install python3
+
+# Arch
+sudo pacman -S python
+
+# macOS (with Homebrew)
+brew install python@3.11
+```
+
+### 2. Install Poetry
+
+This project uses [Poetry](https://python-poetry.org/) to manage its
+Python environment and dependencies, so you don't have to. Install it with
+its official installer:
+
+```bash
+curl -sSL https://install.python-poetry.org | python3 -
+```
+
+This puts the `poetry` command in `~/.local/bin`. If `poetry --version`
+below doesn't work, that directory probably isn't on your `PATH` yet: add
+`export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc` (or `~/.zshrc`),
+then open a new terminal (or run `source ~/.bashrc`) and try again.
+
+```bash
+poetry --version
+```
+
+### 3. Get the code and install its dependencies
+
+```bash
+git clone https://github.com/drds1/echofit.git
+cd echofit
+poetry install --extras dev
+```
+
+`poetry install` creates a self-contained Python environment for this
+project only (it won't touch or conflict with anything else on your
+machine) and installs the exact package versions recorded in the
+committed `poetry.lock`, the same ones this codebase is developed and
+tested against. `--extras dev` is needed, not `--with dev`: the optional
+`pytest`/Jupyter dependencies are declared the standard (PEP 621) way in
+`pyproject.toml`, as an "extra" rather than a Poetry-specific dependency
+group. This step downloads a few hundred MB (mostly JAX) and can take a
+few minutes the first time.
+
+### 4. Run things with `poetry run`
+
+There's no separate "activate the environment" step to remember. Prefix
+any command that needs this project's packages with `poetry run`:
+
+```bash
+poetry run pytest                          # confirm the install actually works
+poetry run python scripts/smoke_test.py    # a quick visual check, see below
+poetry run jupyter notebook notebooks/demo.ipynb
+```
+
+<details>
+<summary>Prefer plain pip? (for anyone who already manages their own Python environment)</summary>
+
 ```bash
 pip install -e ".[dev]"
 ```
 
-Requires a working JAX install (CPU is fine for the demo; see the
-[JAX install guide](https://github.com/google/jax#installation) for GPU/TPU).
+This doesn't get the version pinning `poetry.lock` provides, but installs
+the same package.
+</details>
+
+CPU is fine for everything above; see the
+[JAX install guide](https://github.com/google/jax#installation) if you
+want GPU/TPU support instead.
 
 ## Quickstart
 
@@ -296,6 +380,17 @@ ef.fit(num_warmup=1000, num_samples=1000)
 own panel: the latter overlays the driver's own data (back-transformed
 through the posterior-mean `S_driver`/`C_driver`) on the inferred driving
 light curve panel, a direct visual check that the two agree.
+
+**A single chain isn't enough to trust a free-lag fit, even with a driver.**
+Each `tau_{name}` has a broad `Uniform(0, tau_max)` prior, and the driver's
+own stochastic structure can make the likelihood genuinely multimodal: one
+chain can converge confidently (0 divergences, tight posterior) to a
+plausible-looking but wrong value. Run multiple chains
+(`num_chains=4, chain_method="vectorized"`) and check they agree
+(Gelman-Rubin R-hat, via `numpyro.diagnostics.summary`) before trusting the
+result; more/cleaner data also reduces the risk. See
+`tests/test_free_lag_mode.py::test_free_lag_recovery_with_driver_anchor`
+for a worked example.
 
 ## Status / caveats
 

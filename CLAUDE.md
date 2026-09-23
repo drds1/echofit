@@ -145,16 +145,56 @@ and package layout.
   wrapped in a try/except in `echofit.py::_save_chains` and only warns on
   failure -- `chains.npz` (plain numpy) is the dependency-free guaranteed
   artifact, don't remove it even if the netCDF path seems reliable.
+- **A single NUTS chain is not sufficient evidence for `lag_mode="free"`
+  recovery, even with a driver and zero divergences.** A broad
+  `Uniform(0, tau_max)` prior on each `tau_{band}`, combined with the
+  driver's own stochastic autocorrelation structure, gives a genuinely
+  multimodal likelihood: confirmed directly by running the same fit from 3
+  different single-chain seeds at a sparse data budget (35 obs/line,
+  `noise_level=0.05`) -- 2 of 3 converged (confidently, 0 divergences,
+  tight posterior) to the true lags almost exactly, and the third converged
+  just as confidently to values 3-4x too large. Don't trust a single
+  chain's point estimate for free-lag bands; run several chains
+  (`num_chains=4, chain_method="vectorized"` is cheap on top of a single
+  chain) and check Gelman-Rubin R-hat (`numpyro.diagnostics.summary`)
+  before trusting any of them -- see
+  `tests/test_free_lag_mode.py::test_free_lag_recovery_with_driver_anchor`,
+  which does exactly this and documents the sparse-data failure mode in
+  its docstring. With more/cleaner data (60 obs/line, `noise_level=0.02`)
+  4 chains converge cleanly (R-hat ~1.0) to the true lags -- multimodality
+  risk trades off against how constraining the data actually is.
+- **Dependency versions matter more than they look like they should for
+  this stack.** `jax`/`jaxlib` are pinned `>=0.4.28,<0.5` (not just
+  floored) because an unconstrained range let `poetry install` resolve to
+  `jaxlib==0.10.2`, which has no published wheel for this machine's
+  platform/Python combination and fails outright; `pip install` happened
+  to land on `0.4.38` instead via an indirect constraint from `numpyro`,
+  but that's not something to rely on. A `poetry.lock` is committed so
+  `poetry install` is fully reproducible regardless -- regenerate it
+  (`poetry lock`) if `pyproject.toml`'s dependencies change, don't hand-edit
+  it. Separately, `np.trapz` (plain NumPy, not `jnp.trapz`) was removed in
+  NumPy 2.x; every plain-NumPy trapezoidal-integral call site now uses the
+  same `np.trapezoid if hasattr(np, "trapezoid") else np.trapz` fallback
+  already established for `jnp` in `forward_model.py` -- keep using that
+  pattern for any new one rather than calling `np.trapz`/`jnp.trapz` bare.
 
 ## Useful commands
 
+Poetry-managed (see README.md's "Install" for a from-scratch walkthrough);
+`poetry install --extras dev` once, then prefix commands with `poetry run`,
+or `poetry shell` (needs the `shell` plugin in Poetry 2.x) to avoid
+repeating it. Plain `pip install -e ".[dev]"` also works without Poetry, it
+just skips the `poetry.lock` version pinning.
+
 ```bash
-pip install -e ".[dev]"
-pytest                      # forward-model unit tests + end-to-end MCMC
-                             # recovery test (tests/test_recovery.py, ~1-2 min)
-python scripts/smoke_test.py  # quick visual check: fit + save plots to
-                               # smoke_test_output/report.html (~30-50s)
-jupyter notebook notebooks/demo.ipynb
+poetry install --extras dev
+poetry run pytest             # forward-model unit tests + end-to-end MCMC
+                               # recovery test (tests/test_recovery.py, ~1-2 min --
+                               # the full suite, including the free-lag-mode
+                               # multi-chain recovery test, is more like 10 min)
+poetry run python scripts/smoke_test.py  # quick visual check: fit + save
+                                          # plots to smoke_test_output/report.html (~30-50s)
+poetry run jupyter notebook notebooks/demo.ipynb
 ```
 
 ## Style notes
