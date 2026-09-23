@@ -102,8 +102,11 @@ the driver Fourier coefficients `{S_k, C_k}`, and per-band `{S_band, C_band}`.
 ```
 echofit/
     __init__.py        public API (EchoFit, forward_model helpers, synthetic data)
-    forward_model.py    lag_scaling, response_function, tophat_response_free (free-lag
-                          mode), transfer_coeffs, compute_echo, driver_at
+    forward_model.py    lag_scaling, response_function, thin_disk_response
+                          (accretion-disk physical response), tophat_response_free
+                          (free-lag mode), transfer_coeffs, compute_echo, driver_at
+    responses.py         a small registry (register_response/get_response) for
+                          swapping in a built-in or custom physical response
     model.py            NumPyro model (reverberation_model) + DRW prior scale
     grid_utils.py        estimate_dt_min: robust cadence estimate shared by
                           EchoFit.build_grid() and synthetic.py
@@ -129,6 +132,8 @@ tests/
     test_run_manager.py    checkpointing + resume-after-interruption tests
     test_response_function_swap.py  swapped response_function reflected in
                           both fit and plot
+    test_thin_disk_response.py  causality/normalisation/gradient checks on
+                          thin_disk_response, plus the responses.py registry
     test_shift_degeneracy.py  deterministic proof of the free-lag identifiability
                           claim above
     test_free_lag_mode.py  validation (M_BH/driver requirements) + a real
@@ -329,14 +334,39 @@ for that, see `tests/test_recovery.py`.
 ## Swapping the response function
 
 `forward_model.response_function` is the single place the physical
-(`lag_mode="physical"`, see below) response shape lives. To try a
-different parametric family, write a new function with the same signature,
-`(tau_grid, log_mdot, wavelength, inclination, M_BH, ...) -> psi`,
-returning a causal, area-normalised array on `tau_grid`, and reassign it
-at runtime: `import echofit.model as model; model.response_function =
-my_fn`, then fit as usual. That's the only place to patch: `echofit.py`'s
-plotting code reads it the same way (module-attribute access, not its own
-import), so a swap is honoured consistently by both fitting and plotting.
+(`lag_mode="physical"`, see below) response shape lives. Any replacement
+must have the same signature, `(tau_grid, log_mdot, wavelength,
+inclination, M_BH, ...) -> psi`, and return a causal, area-normalised array
+on `tau_grid`. Two are built in:
+
+* `response_function` (the default): an ad-hoc but cheap skew-normal shape,
+  fast to evaluate every NUTS step.
+* `thin_disk_response`: a physically-motivated accretion-disk response,
+  ported (as a deterministic, JAX-differentiable quadrature, not a literal
+  translation) from the author's PhD-era CREAM Fortran code
+  ([`pycecream`](https://github.com/drds1/pycecream)`/cream_f90.f90`'s
+  `tfbx`/`tr4visc`/`tr4irad`). It integrates a genuine Shakura-Sunyaev
+  viscous (+ optional lamppost-irradiation) temperature profile over the
+  disk's light-travel-time delay surface, weighted by the Planck-function
+  temperature derivative -- giving inclination-driven skew and a hard
+  causal edge from the geometry itself, rather than an assumed shape. It's
+  slower per evaluation (integrated over a radius/azimuth grid, not
+  closed-form) and exposed via `echofit.responses` for discoverability:
+
+  ```python
+  import echofit.model as model
+  from echofit.responses import get_response
+
+  model.response_function = get_response("thin_disk")
+  ```
+
+`echofit.responses.register_response(name, fn)` registers your own
+response under a name for `get_response` to find; `available_responses()`
+lists what's registered. Registering doesn't by itself change what a fit
+uses -- reassigning `model.response_function` (as above) is the one place
+to patch, since `echofit.py`'s plotting code reads it the same way
+(module-attribute access, not its own import), so a swap is honoured
+consistently by both fitting and plotting.
 
 ## Emission-line / free-lag mode and driver light curves
 

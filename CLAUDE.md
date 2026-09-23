@@ -105,6 +105,38 @@ and package layout.
    add another free-form response family, check its gradient w.r.t.
    whatever parameter NUTS samples before trusting a fit that used it.
 
+8. **`thin_disk_response` and `echofit/responses.py` are a second
+   `lag_mode="physical"` response family, not a new mechanism.** They plug
+   into the *existing* swap point from decision #5
+   (`echofit.model.response_function = ...`) -- `echofit/responses.py` is
+   only a small registry (`register_response`/`get_response`) for
+   discoverability, it does not change how a response actually gets wired
+   into a fit. `thin_disk_response` is a JAX-differentiable, deterministic-
+   quadrature adaptation of the Monte-Carlo disk integrator (`tfbx` +
+   `tr4visc`/`tr4irad`) in the author's PhD-era CREAM Fortran code
+   (`pycecream`'s `cream_f90.f90`): real Shakura-Sunyaev viscous (+ optional
+   lamppost-irradiation) temperature profile, the disk's own light-travel-
+   time delay surface `tau(r, phi) = r(1 + sin(inclination) cos(phi))`, and
+   a Planck-derivative response weighting -- genuine physics, not an
+   assumed shape, unlike the default skew-normal. Two adaptation choices
+   worth knowing before touching it:
+   - It reuses `lag_scaling(log_mdot, wavelength, M_BH)` for its absolute
+     lag scale (the "Wien radius"), rather than independently deriving an
+     Eddington-ratio-to-Mdot conversion from scratch. This was deliberate:
+     an independent derivation would give `log_mdot` a second, incompatible
+     meaning depending which response a band used. Only the inner (ISCO)
+     radius uses real physical constants (G, c, M_sun) directly, since that
+     conversion doesn't need any extra accretion-rate calibration.
+   - Like `tophat_response_free`, it must stay a *smoothed* (Gaussian
+     kernel) deposit of disk-grid points onto `tau_grid`, never a hard
+     histogram/binning -- same zero-gradient trap as decision #7's "already
+     hit once", confirmed again here with `jax.grad` before considering the
+     function done (see `tests/test_thin_disk_response.py`).
+   - It costs `O(n_r * n_phi * n_tau)` per evaluation (a real
+     radius/azimuth integral) versus the skew-normal's closed form, so it's
+     an optional, heavier alternative -- not a default-swap candidate for
+     routine fits without checking the cost is acceptable.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model
@@ -163,6 +195,21 @@ and package layout.
   its docstring. With more/cleaner data (60 obs/line, `noise_level=0.02`)
   4 chains converge cleanly (R-hat ~1.0) to the true lags -- multimodality
   risk trades off against how constraining the data actually is.
+- **Running `pytest` in a background/headless shell can crash on exit if
+  matplotlib's default backend is interactive.** `tests/test_response_function_swap.py`
+  calls `EchoFit.plot_lightcurve_fits()` without ever closing the returned
+  figure; on a machine where matplotlib's default backend is `TkAgg` (true
+  on at least one contributor's Mac), this creates real Tk windows against
+  the active display even from a non-interactive test run. If that process
+  is then killed (e.g. a `timeout` wrapper cutting off a background run
+  before the ~10-minute full suite finishes), Python's interpreter teardown
+  can hit a Tcl/Tk finalisation bug (`PyEval_RestoreThread: NULL tstate`)
+  and abort with `SIGABRT`, a visible crash dialog with no connection to
+  whatever test was actually running. Run `pytest` with `MPLBACKEND=Agg`
+  set (and give it enough time to finish) in any headless/background
+  context to avoid this; it's an invocation-time fix, not a reason to
+  force a non-interactive backend inside `plotting.py` itself, which would
+  break interactive use from the notebook.
 - **Dependency versions matter more than they look like they should for
   this stack.** `jax`/`jaxlib` are pinned `>=0.4.28,<0.5` (not just
   floored) because an unconstrained range let `poetry install` resolve to
