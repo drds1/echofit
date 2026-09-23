@@ -35,6 +35,16 @@ def main():
     parser.add_argument("--num-samples", type=int, default=300)
     parser.add_argument("--seed", type=int, default=2)
     parser.add_argument(
+        "--noise-level", type=float, default=0.08,
+        help=(
+            "Fractional noise in the synthetic data. Deliberately higher than "
+            "tests/test_recovery.py's 0.02 (which is tuned for a tight numeric "
+            "check) so the posterior-predictive credible bands are actually "
+            "visible by eye here -- at 0.02 the 95%% CI is ~1%% of the data's "
+            "y-range, i.e. a couple of pixels."
+        ),
+    )
+    parser.add_argument(
         "--outdir", type=Path, default=Path("smoke_test_output"),
         help="Directory to write PNGs + report.html into.",
     )
@@ -56,7 +66,7 @@ def main():
         n_freq=15,
         n_tau=100,
         tau_max=50.0,
-        noise_level=0.02,
+        noise_level=args.noise_level,
         seed=args.seed,
     )
     truth = data["truth"]

@@ -52,7 +52,7 @@ def plot_raw_lightcurves(bands: Dict[str, dict], figsize_per_panel=(7, 1.8)):
     for ax, (name, d) in zip(axes, ordered):
         ax.errorbar(
             d["t"], d["y"], yerr=d["yerr"], fmt="o", ms=4, color=colors[name],
-            ecolor=colors[name], alpha=0.85, capsize=2,
+            ecolor=colors[name], alpha=0.85, capsize=3, elinewidth=1.2, capthick=1.2,
         )
         ax.set_ylabel(f"{name}\n({d['wavelength']:.0f} \u00c5)")
         ax.grid(alpha=0.25)
@@ -110,7 +110,7 @@ def plot_lightcurve_fits(
         ax_lc.plot(t_fine, med, color=color, lw=1.5, label="posterior median")
         ax_lc.errorbar(
             d["t"], d["y"], yerr=d["yerr"], fmt="o", ms=4, color="k",
-            ecolor="k", alpha=0.7, capsize=2, label="data",
+            ecolor="k", alpha=0.7, capsize=3, elinewidth=1.2, capthick=1.2, label="data",
         )
         ax_lc.set_ylabel(f"{name}\n({d['wavelength']:.0f} \u00c5)")
         ax_lc.grid(alpha=0.25)
