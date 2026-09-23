@@ -11,7 +11,7 @@ lag) by construction.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -27,6 +27,38 @@ def make_frequency_grid(n_freq: int, t_span: float, dt_min: float) -> np.ndarray
     return np.geomspace(w_min, w_max, n_freq)
 
 
+def _sample_uniform_excluding_gaps(
+    rng: np.random.Generator,
+    t_span: float,
+    gaps: Sequence[Tuple[float, float]],
+    size: int,
+) -> np.ndarray:
+    """Uniformly sample ``size`` times in ``[0, t_span)``, skipping the given
+    ``(gap_start, gap_duration)`` windows -- e.g. a seasonal/weather/downtime
+    gap in an observing campaign. Density stays uniform over the remaining
+    (observable) time, it's just zero inside the gaps.
+    """
+    allowed = []  # list of (start, end) intervals actually observable
+    cursor = 0.0
+    for start, duration in sorted(gaps, key=lambda g: g[0]):
+        start = float(np.clip(start, 0.0, t_span))
+        end = float(np.clip(start + duration, start, t_span))
+        if start > cursor:
+            allowed.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < t_span:
+        allowed.append((cursor, t_span))
+    if not allowed:
+        raise ValueError("gaps cover the entire time span; no observable time remains")
+
+    lengths = np.array([b - a for a, b in allowed])
+    edges = np.concatenate([[0.0], np.cumsum(lengths)])
+    u = rng.uniform(0.0, edges[-1], size=size)
+    interval_idx = np.clip(np.searchsorted(edges, u, side="right") - 1, 0, len(allowed) - 1)
+    starts = np.array([a for a, _ in allowed])[interval_idx]
+    return starts + (u - edges[interval_idx])
+
+
 def generate_synthetic_dataset(
     bands: Optional[Dict[str, float]] = None,
     M_BH: float = 1.0e8,
@@ -40,6 +72,7 @@ def generate_synthetic_dataset(
     n_tau: int = 400,
     tau_max: float = 60.0,
     noise_level: float = 0.02,
+    gaps: Optional[Sequence[Tuple[float, float]]] = None,
     seed: int = 0,
 ) -> dict:
     """Generate a synthetic multi-band reverberation-mapping dataset.
@@ -54,13 +87,21 @@ def generate_synthetic_dataset(
     t_span : float
         Total light-curve baseline, days.
     n_obs_per_band : int
-        Number of (irregular) observation epochs per band.
+        Number of (irregular) observation epochs per band, before removing
+        any that fall in ``gaps``.
     n_freq, n_tau, tau_max : int, int, float
         Resolution of the driver Fourier grid and the lag grid used to
         build the ground-truth response functions.
     noise_level : float
         Fractional Gaussian noise added to each band (relative to that
         band's echo amplitude).
+    gaps : sequence of (start, duration), optional
+        Observing gaps (days) applied to every band identically -- e.g.
+        ``[(50, 14), (150, 21)]`` for a 2-week gap starting day 50 and a
+        3-week gap starting day 150 (weather/downtime/seasonal-style
+        campaign structure). ``n_obs_per_band`` observations are still drawn
+        uniformly at random, just excluding these windows, so the same
+        total point count is spread more densely over the remaining time.
     seed : int
         RNG seed.
 
@@ -80,10 +121,16 @@ def generate_synthetic_dataset(
     # below is derived from the *actual* (irregular) cadence -- via the same
     # estimator EchoFit.build_grid() uses -- rather than a prior guess. This
     # keeps the ground-truth driver and the fitting basis on the same grid.
-    t_by_band = {
-        name: np.sort(rng.uniform(0.0, t_span, size=n_obs_per_band))
-        for name, _ in sorted_bands
-    }
+    if gaps:
+        t_by_band = {
+            name: np.sort(_sample_uniform_excluding_gaps(rng, t_span, gaps, n_obs_per_band))
+            for name, _ in sorted_bands
+        }
+    else:
+        t_by_band = {
+            name: np.sort(rng.uniform(0.0, t_span, size=n_obs_per_band))
+            for name, _ in sorted_bands
+        }
 
     dt_min = estimate_dt_min(t_by_band.values(), t_span=t_span)
     freqs = make_frequency_grid(n_freq, t_span, dt_min)
@@ -143,4 +190,4 @@ def generate_synthetic_dataset(
         "bands": per_band_truth,
     }
 
-    return {"bands": out_bands, "truth": truth, "freqs": freqs, "tau_grid": tau_grid}
+    return {"bands": out_bands, "truth": truth, "freqs": freqs, "tau_grid": tau_grid, "gaps": gaps}

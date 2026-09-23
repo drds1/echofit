@@ -95,12 +95,18 @@ See `notebooks/demo.ipynb` for the full walkthrough.
 
 For a quick "did I break anything" check after touching `forward_model.py`,
 `model.py`, or `echofit.py`, run a short fit on synthetic data and save plots
-of the raw data, the posterior-predictive fit, and MCMC trace diagnostics:
+of the raw data, the inferred driving light curve, the posterior-predictive
+echo fit + response function per band, and MCMC trace diagnostics:
 
 ```bash
 python scripts/smoke_test.py                # ~30-50s, 300 warmup + 300 samples
 python scripts/smoke_test.py --num-warmup 100 --num-samples 100   # faster, noisier
+python scripts/smoke_test.py --no-gaps       # fully uniform random sampling instead
 ```
+
+By default the synthetic campaign includes two observing gaps (2 weeks from
+day 50, 3 weeks from day 150) to make sampling irregular/harder, closer to a
+real campaign than uniform random sampling.
 
 Writes PNGs and a `report.html` (open it to see everything in one page) to
 `smoke_test_output/`. This is a visual/eyeball check, not a pass/fail test —

@@ -16,7 +16,7 @@ import jax.numpy as jnp
 
 from .model import reverberation_model
 from .inference import run_mcmc
-from .forward_model import response_function, transfer_coeffs, compute_echo
+from .forward_model import response_function, transfer_coeffs, compute_echo, driver_at
 from .grid_utils import estimate_dt_min
 from . import plotting
 
@@ -220,7 +220,12 @@ class EchoFit:
             y_pred_samples[name] = np.asarray(y_pred)
             psi_samples[name] = np.asarray(psi)
 
+        driver_samples = jax.vmap(
+            lambda S_s, C_s: driver_at(S_s, C_s, self.freqs, t_fine)
+        )(S, C)
+
         return plotting.plot_lightcurve_fits(
             self.bands, np.asarray(t_fine), y_pred_samples,
-            np.asarray(self.tau_grid), psi_samples, **kwargs,
+            np.asarray(self.tau_grid), psi_samples,
+            driver_samples=np.asarray(driver_samples), **kwargs,
         )

@@ -48,12 +48,19 @@ def main():
         "--outdir", type=Path, default=Path("smoke_test_output"),
         help="Directory to write PNGs + report.html into.",
     )
+    parser.add_argument(
+        "--no-gaps", action="store_true",
+        help="Disable the default observing gaps (2 weeks from day 50, 3 weeks from day 150).",
+    )
     args = parser.parse_args()
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     # Same well-resolved-lag setup as tests/test_recovery.py: M_BH large
     # enough that mean lags (days) are well above the sampling cadence, so
     # the echo shape is actually visible by eye rather than buried in noise.
+    # Two observing gaps make the campaign more realistic (and harder for
+    # NUTS/the frequency-grid estimate) than fully uniform random sampling.
+    gaps = None if args.no_gaps else [(50, 14), (150, 21)]
     data = generate_synthetic_dataset(
         M_BH=1.0e9,
         log_mdot_true=0.0,
@@ -67,6 +74,7 @@ def main():
         n_tau=100,
         tau_max=50.0,
         noise_level=args.noise_level,
+        gaps=gaps,
         seed=args.seed,
     )
     truth = data["truth"]

@@ -69,7 +69,9 @@ def plot_lightcurve_fits(
     y_pred_samples: Dict[str, np.ndarray],
     tau_grid: np.ndarray,
     psi_samples: Dict[str, np.ndarray],
+    driver_samples: Optional[np.ndarray] = None,
     figsize_per_row=(10, 2.2),
+    driver_row_height=1.8,
 ):
     """Posterior-predictive light curves with 68%/95% credible bands, plus
     the corresponding response function psi(tau) next to each band.
@@ -88,18 +90,39 @@ def plot_lightcurve_fits(
     psi_samples : dict
         ``{band_name: array of shape (n_samples, n_tau)}`` posterior draws
         of psi(tau) for that band.
+    driver_samples : (n_samples, n_fine) array, optional
+        Posterior draws of the raw driver X(t) (see
+        ``forward_model.driver_at``), evaluated at the same ``t_fine`` as
+        ``y_pred_samples``. If given, plotted as an extra panel above the
+        per-band rows, sharing the same time axis so lags between the
+        driver and each band's echo are visually alignable.
     """
     ordered, colors = _band_colors(bands)
     n = len(ordered)
+    has_driver = driver_samples is not None
+    n_rows = n + (1 if has_driver else 0)
+    height_ratios = ([driver_row_height] if has_driver else []) + [figsize_per_row[1]] * n
     fig, axes = plt.subplots(
-        n, 2, figsize=(figsize_per_row[0], figsize_per_row[1] * n),
-        gridspec_kw={"width_ratios": [3, 1]},
+        n_rows, 2, figsize=(figsize_per_row[0], sum(height_ratios)),
+        gridspec_kw={"width_ratios": [3, 1], "height_ratios": height_ratios},
     )
-    if n == 1:
+    if n_rows == 1:
         axes = axes[None, :]
 
+    if has_driver:
+        ax_drv, ax_drv_unused = axes[0, 0], axes[0, 1]
+        lo95, lo68, med, hi68, hi95 = np.percentile(driver_samples, [2.5, 16, 50, 84, 97.5], axis=0)
+        ax_drv.fill_between(t_fine, lo95, hi95, color="0.5", alpha=0.15)
+        ax_drv.fill_between(t_fine, lo68, hi68, color="0.5", alpha=0.35)
+        ax_drv.plot(t_fine, med, color="0.2", lw=1.5)
+        ax_drv.set_ylabel("driver\nX(t)")
+        ax_drv.set_title("Inferred driving light curve", fontsize=10)
+        ax_drv.grid(alpha=0.25)
+        ax_drv.sharex(axes[1, 0])
+        ax_drv_unused.axis("off")
+
     for row, (name, d) in enumerate(ordered):
-        ax_lc, ax_psi = axes[row, 0], axes[row, 1]
+        ax_lc, ax_psi = axes[row + has_driver, 0], axes[row + has_driver, 1]
         color = colors[name]
 
         preds = y_pred_samples[name]
