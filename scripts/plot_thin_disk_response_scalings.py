@@ -2,11 +2,14 @@
 plot_thin_disk_response_scalings.py
 ====================================
 
-Generates the two figures used in docs/thin_disk_response.md: a case-study
-accretion disk's response function ``forward_model.thin_disk_response``
-evaluated (a) at fixed accretion rate for a range of inclinations, and
-(b) face-on for a range of accretion rates, each with a vertical line at
-the response's own (numerically integrated) mean lag.
+Generates the three figures used in docs/thin_disk_response.md: a
+case-study accretion disk's response function
+``forward_model.thin_disk_response`` evaluated (a) at fixed accretion rate
+for a range of inclinations, and (b) face-on for a range of accretion
+rates, each with a vertical line at the response's own (numerically
+integrated) mean lag; and (c) a comparison of the exact response against
+the fast, precomputed-template approximation from
+``forward_model.build_thin_disk_response_fast``.
 
 This is a documentation/figure-generation script, not a test -- run it
 directly to regenerate the PNGs under docs/images/ if thin_disk_response's
@@ -22,7 +25,7 @@ matplotlib.use("Agg")
 import numpy as np
 import matplotlib.pyplot as plt
 
-from echofit.forward_model import thin_disk_response
+from echofit.forward_model import thin_disk_response, build_thin_disk_response_fast
 
 _np_trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
@@ -124,10 +127,57 @@ def plot_mdot_sweep():
     plt.close(fig)
 
 
+def plot_fast_vs_slow():
+    """Compares the exact disk integral against build_thin_disk_response_fast's
+    precomputed-template-plus-stretch approximation: a case close to the
+    table's own reference point (where the stretch is small), and a
+    deliberately harder case far from it (high inclination -- the response's
+    sharpest feature -- at a different wavelength) to show honestly where
+    the self-similar-stretching approximation starts to strain. The hard
+    case needs its own zoomed inset: at full width the two curves look
+    almost identical (both integrate to the same area and agree well
+    everywhere except right at the sharp near-zero-lag spike), which would
+    be a misleading picture on its own -- zooming into just that spike is
+    what actually shows the ~35% peak-height mismatch this case has."""
+    fast = build_thin_disk_response_fast(M_BH)
+    tau_grid = np.linspace(-2.0, 15.0, 600)
+    cases = [
+        {"log_mdot": 0.0, "wavelength": WAVELENGTH, "inclination": 30.0,
+         "label": "near the table's reference point", "zoom": None},
+        {"log_mdot": -0.5, "wavelength": 7000.0, "inclination": 85.0,
+         "label": "far from it: high inclination, different wavelength", "zoom": (-0.1, 0.6)},
+    ]
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    for ax, case in zip(axes, cases):
+        psi_slow = np.asarray(thin_disk_response(
+            tau_grid, log_mdot=case["log_mdot"], wavelength=case["wavelength"],
+            inclination=case["inclination"], M_BH=M_BH, n_r=PLOT_N_R, n_phi=PLOT_N_PHI,
+        ))
+        psi_fast = np.asarray(fast(tau_grid, case["log_mdot"], case["wavelength"], case["inclination"], M_BH))
+        ax.plot(tau_grid, psi_slow, label="exact (thin_disk_response)")
+        ax.plot(tau_grid, psi_fast, "--", label="fast (templated + stretched)")
+        title = (
+            f"log_mdot={case['log_mdot']}, wavelength={case['wavelength']:.0f} A, "
+            f"inclination={case['inclination']:.0f} deg\n{case['label']}"
+        )
+        if case["zoom"] is not None:
+            title += " -- zoomed to the peak"
+            ax.set_xlim(*case["zoom"])
+        ax.set_title(title, fontsize=9)
+        ax.set_xlabel("lag, tau (days)")
+        ax.legend(fontsize=8)
+    axes[0].set_ylabel("psi(tau)")
+    fig.tight_layout()
+    fig.savefig(f"{OUT_DIR}/thin_disk_response_fast_vs_slow.png", dpi=150)
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     import os
 
     os.makedirs(OUT_DIR, exist_ok=True)
     plot_inclination_sweep()
     plot_mdot_sweep()
+    plot_fast_vs_slow()
     print(f"Wrote figures to {OUT_DIR}/")

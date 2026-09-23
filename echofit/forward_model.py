@@ -42,7 +42,7 @@ it can be swapped for a different parametric family later without touching
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -252,6 +252,7 @@ def thin_disk_response(
     irradiation_weight: float = 0.5,
     n_r: int = 50,
     n_phi: int = 64,
+    r_max_factor: float = 20.0,
     smoothing_days: float | None = None,
 ):
     """Causal, area-normalised transfer function from thin-disk reprocessing
@@ -322,6 +323,25 @@ def thin_disk_response(
         Higher is more accurate and more expensive: this response is
         integrated over ``n_r * n_phi`` points per evaluation, unlike
         :func:`response_function`'s closed-form evaluation.
+    r_max_factor : float
+        Caps the radial integration domain at ``r_max_factor * tau_ref``
+        (``tau_ref`` from :func:`lag_scaling`), instead of extending all
+        the way to the geometrically-largest radius that could in
+        principle contribute at ``tau_grid[-1]`` (``tau_grid[-1] / (1 -
+        sin(inclination))``, which blows up at high inclination -- e.g.
+        ~1000x ``tau_ref`` at 80 degrees for a typical grid). The physical
+        response weight decays exponentially in radius (see the Planck
+        derivative below) and is negligible far below that geometric
+        extreme, so the cap loses essentially no real signal (confirmed
+        directly against an uncapped, far-higher-resolution reference: max
+        absolute difference ~2e-4) while keeping the log-spaced radial grid
+        concentrated where the response actually has weight. Without this,
+        the same ``n_r`` that resolves a face-on response smoothly leaves a
+        high-inclination one visibly jagged, since log-spacing over a
+        ~1000x larger domain is correspondingly ~1000x coarser near
+        ``tau_ref`` -- this was caught by actually plotting the response at
+        high inclination (see `docs/thin_disk_response.md`), not by the
+        unit tests, which don't check smoothness.
     smoothing_days : float, optional
         Gaussian deposit bandwidth (days) used to bin disk-grid points onto
         ``tau_grid``. Defaults to 1.5x the ``tau_grid`` spacing.
@@ -333,7 +353,8 @@ def thin_disk_response(
     """
     tau_ref = lag_scaling(log_mdot, wavelength, M_BH)
     r_in = jnp.clip(_isco_light_days(M_BH), 1e-4, 0.4 * tau_ref)
-    r_max = tau_grid[-1] / jnp.clip(1.0 - jnp.sin(jnp.deg2rad(inclination)), 1e-2, None)
+    r_max_geometric = tau_grid[-1] / jnp.clip(1.0 - jnp.sin(jnp.deg2rad(inclination)), 1e-2, None)
+    r_max = jnp.minimum(r_max_geometric, r_max_factor * tau_ref)
     r_max = jnp.clip(r_max, 2.0 * tau_ref, None)
 
     # log-spaced radial quadrature grid; jnp.gradient gives each point's
@@ -387,6 +408,166 @@ def thin_disk_response(
     area = trapz(raw, tau_grid)
     psi = raw / jnp.clip(area, 1e-12, None)
     return psi
+
+
+class ThinDiskResponseTable(NamedTuple):
+    """Precomputed :func:`thin_disk_response` templates across inclination,
+    for :func:`thin_disk_response_from_table` / :func:`build_thin_disk_response_fast`
+    -- see those for why this exists."""
+
+    M_BH: float
+    incl_grid: jnp.ndarray       # (n_incl,) degrees
+    u_grid: jnp.ndarray          # (n_u,) days, dimensionless-lag axis at the reference mdot/wavelength
+    templates: jnp.ndarray       # (n_incl, n_u)
+    tau_ref_reference: float     # lag_scaling(reference_log_mdot, reference_wavelength, M_BH)
+
+
+def build_thin_disk_response_table(
+    M_BH,
+    incl_grid=None,
+    reference_log_mdot: float = 0.0,
+    reference_wavelength: float = 5000.0,
+    u_max_factor: float = 15.0,
+    n_u: int = 1200,
+    n_r: int = 400,
+    n_phi: int = 96,
+    **thin_disk_kwargs,
+) -> ThinDiskResponseTable:
+    """Precompute a lookup table of :func:`thin_disk_response` shapes across
+    inclination, at high quadrature resolution, once -- so a fit can look
+    the response up (:func:`thin_disk_response_from_table`) instead of
+    re-running the full O(n_r * n_phi * n_tau) disk integral on every NUTS
+    step.
+
+    This is a JAX-differentiable version of the precompute-and-interpolate
+    trick used in the author's PhD-era CREAM Fortran code: precompute the
+    response at a fixed accretion rate across an inclination grid once at
+    the start of a run, then get any other inclination by interpolating the
+    table, and any other accretion rate (or wavelength) by *stretching* the
+    lag axis according to the ``mdot**(1/3)`` (and ``wavelength**(4/3)``)
+    scaling :func:`lag_scaling` already uses. Section 5 of
+    ``docs/thin_disk_response.md`` explains why that stretch is only
+    approximate (a fixed absolute inner radius means the disk isn't
+    *exactly* self-similar under it), and it is the same approximation the
+    original Fortran made, not something new introduced here.
+
+    The returned table is a plain, fixed set of arrays, meant to be built
+    *before* a fit (M_BH is fixed input anyway, per CLAUDE.md decision #3)
+    and passed to :func:`build_thin_disk_response_fast` to get an
+    interpolation-based response function ready to assign to
+    ``echofit.model.response_function``.
+
+    Parameters
+    ----------
+    M_BH : float
+        Fixed black hole mass, matching the run this table is for.
+    incl_grid : array_like, optional
+        Inclinations (degrees) to precompute templates at. Defaults to
+        every 2.5 degrees from 0 to 90 (37 templates).
+    reference_log_mdot, reference_wavelength : float
+        The one (log_mdot, wavelength) pair templates are actually computed
+        at; every other (log_mdot, wavelength) is reached by stretching.
+    u_max_factor : float
+        The template's own lag axis spans ``[-0.05, u_max_factor] *
+        tau_ref_reference``. Must be generous enough that, after stretching,
+        it still covers whatever part of the real ``tau_grid`` matters for
+        the (log_mdot, wavelength) values a fit actually visits -- lookups
+        outside this range return 0 (see :func:`thin_disk_response_from_table`),
+        which is safe but silently loses accuracy in the tail if too small.
+    n_u : int
+        Resolution of the template's own lag axis.
+    n_r, n_phi : int
+        Passed through to :func:`thin_disk_response` for the (one-off,
+        so affordably high-resolution) template computation.
+    **thin_disk_kwargs
+        Any other :func:`thin_disk_response` keyword (``viscous_slope``,
+        ``include_irradiation``, ...), applied identically to every
+        inclination in the table.
+    """
+    if incl_grid is None:
+        incl_grid = jnp.arange(0.0, 90.001, 2.5)
+    else:
+        incl_grid = jnp.asarray(incl_grid)
+
+    tau_ref_reference = float(lag_scaling(reference_log_mdot, reference_wavelength, M_BH))
+    u_grid = jnp.linspace(-0.05 * tau_ref_reference, u_max_factor * tau_ref_reference, n_u)
+
+    templates = jnp.stack([
+        thin_disk_response(
+            u_grid, reference_log_mdot, reference_wavelength, float(incl), M_BH,
+            n_r=n_r, n_phi=n_phi, **thin_disk_kwargs,
+        )
+        for incl in incl_grid
+    ])
+
+    return ThinDiskResponseTable(
+        M_BH=M_BH, incl_grid=incl_grid, u_grid=u_grid,
+        templates=templates, tau_ref_reference=tau_ref_reference,
+    )
+
+
+def thin_disk_response_from_table(table: ThinDiskResponseTable, tau_grid, log_mdot, wavelength, inclination):
+    """Fast, interpolated stand-in for :func:`thin_disk_response`, using a
+    precomputed :class:`ThinDiskResponseTable` (see
+    :func:`build_thin_disk_response_table`) instead of recomputing the disk
+    integral. Two cheap lookups replace it:
+
+    1. Interpolate the template family over ``inclination`` (linear,
+       differentiable in ``inclination`` almost everywhere, same as any
+       other lookup-table use in JAX) to get one dimensionless template for
+       this exact inclination, still on the table's own ``u_grid``.
+    2. Stretch that template onto the real ``tau_grid`` by
+       ``s = lag_scaling(log_mdot, wavelength, M_BH) / table.tau_ref_reference``
+       -- i.e. evaluate it at ``tau_grid / s`` and divide by ``s`` to keep
+       the area normalised to 1 under that change of variables -- which is
+       exactly the "stretch to a different mdot" trick from
+       :func:`build_thin_disk_response_table`'s docstring.
+
+    Both steps are ``jnp.interp`` against a fixed table, so this is `O(n_u +
+    n_tau)` per call rather than :func:`thin_disk_response`'s `O(n_r * n_phi
+    * n_tau)` disk integral -- the whole point for use inside NUTS. Queries
+    landing outside the table's ``u_grid`` (an accretion rate/wavelength
+    combination far from what the table was built for) return 0 rather than
+    extrapolating, which is safe but a sign the table needs a larger
+    ``u_max_factor`` or a reference point closer to where the fit actually
+    lives.
+    """
+    tau_ref = lag_scaling(log_mdot, wavelength, table.M_BH)
+    stretch = jnp.clip(tau_ref / table.tau_ref_reference, 1e-6, None)
+
+    psi_u = jax.vmap(lambda column: jnp.interp(inclination, table.incl_grid, column))(table.templates.T)
+
+    u_query = tau_grid / stretch
+    raw = jnp.interp(u_query, table.u_grid, psi_u, left=0.0, right=0.0) / stretch
+    raw = jnp.where(tau_grid >= 0.0, raw, 0.0)
+
+    trapz = jnp.trapezoid if hasattr(jnp, "trapezoid") else jnp.trapz
+    area = trapz(raw, tau_grid)
+    return raw / jnp.clip(area, 1e-12, None)
+
+
+def build_thin_disk_response_fast(M_BH, **table_kwargs) -> Callable:
+    """Build and return a ready-to-use, interpolation-based response
+    function matching the standard ``(tau_grid, log_mdot, wavelength,
+    inclination, M_BH, ...)`` contract (CLAUDE.md decision #5) -- the
+    one-call convenience wrapper around :func:`build_thin_disk_response_table`
+    + :func:`thin_disk_response_from_table`::
+
+        import echofit.model as model
+        from echofit.forward_model import build_thin_disk_response_fast
+
+        model.response_function = build_thin_disk_response_fast(M_BH=1e8)
+
+    The underlying table (useful for inspecting/plotting what got
+    precomputed) is attached as ``.table`` on the returned function.
+    """
+    table = build_thin_disk_response_table(M_BH, **table_kwargs)
+
+    def _response(tau_grid, log_mdot, wavelength, inclination, M_BH=None, **kwargs):
+        return thin_disk_response_from_table(table, tau_grid, log_mdot, wavelength, inclination)
+
+    _response.table = table
+    return _response
 
 
 def transfer_coeffs(tau_grid, psi, freqs):

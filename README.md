@@ -103,8 +103,10 @@ the driver Fourier coefficients `{S_k, C_k}`, and per-band `{S_band, C_band}`.
 echofit/
     __init__.py        public API (EchoFit, forward_model helpers, synthetic data)
     forward_model.py    lag_scaling, response_function, thin_disk_response
-                          (accretion-disk physical response), tophat_response_free
-                          (free-lag mode), transfer_coeffs, compute_echo, driver_at
+                          (accretion-disk physical response), build_thin_disk_response_fast
+                          (precomputed-template fast path for thin_disk_response),
+                          tophat_response_free (free-lag mode), transfer_coeffs,
+                          compute_echo, driver_at
     responses.py         a small registry (register_response/get_response) for
                           swapping in a built-in or custom physical response
     model.py            NumPyro model (reverberation_model) + DRW prior scale
@@ -138,6 +140,8 @@ tests/
                           both fit and plot
     test_thin_disk_response.py  causality/normalisation/gradient checks on
                           thin_disk_response, plus the responses.py registry
+    test_thin_disk_response_fast.py  the precomputed-template fast path:
+                          accuracy near/far from its reference point, gradients, speed
     test_shift_degeneracy.py  deterministic proof of the free-lag identifiability
                           claim above
     test_free_lag_mode.py  validation (M_BH/driver requirements) + a real
@@ -370,6 +374,28 @@ on `tau_grid`. Two are built in:
   the Fortran's Monte Carlo), plus charts verifying that inclination
   reshapes the response without moving its mean lag, and that the mean lag
   scales with accretion rate the way thin-disk theory predicts.
+
+  Because that disk integral is much more expensive than the closed-form
+  skew-normal and NUTS calls a band's response function on every leapfrog
+  step, there's also a fast path, `build_thin_disk_response_fast`: it
+  precomputes `thin_disk_response` once across a grid of inclinations, then
+  gets any other inclination via interpolation and any other accretion
+  rate/wavelength by *stretching* the lag axis according to
+  `lag_scaling`'s own `mdot**(1/3)`/`wavelength**(4/3)` law, the same
+  precompute-and-stretch trick used in the author's PhD-era CREAM code --
+  confirmed ~90x faster per call at matched resolution:
+
+  ```python
+  from echofit.forward_model import build_thin_disk_response_fast
+
+  model.response_function = build_thin_disk_response_fast(M_BH=1e8)
+  ```
+
+  The stretch is an approximation (the disk's inner edge is a fixed
+  absolute radius, so it doesn't stretch too), worst at high inclination
+  far from the table's reference accretion rate/wavelength -- see
+  `docs/thin_disk_response.md` section 5 for exactly how much that costs
+  in accuracy and when to use the exact `thin_disk_response` instead.
 
 `echofit.responses.register_response(name, fn)` registers your own
 response under a name for `get_response` to find; `available_responses()`

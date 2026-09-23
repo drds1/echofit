@@ -144,6 +144,53 @@ and package layout.
      by comparing 40x24/50x64/60x120 side by side: 50x64 is already
      converged onto the same curve as 60x120. Don't drop below ~50x64
      without re-checking a plotted psi, not just the numeric tests.
+   - `r_max` is capped at `r_max_factor * tau_ref` (default 20x), not left
+     as the uncapped `tau_grid[-1] / (1 - sin(inclination))` geometric
+     formula -- that formula alone made high-inclination curves ~66x-100x
+     wider in radial domain than a face-on one on the same `tau_grid` (at
+     80/89 degrees respectively), spreading the same log-spaced `n_r`
+     across a domain two orders of magnitude bigger and leaving it visibly
+     wavy right where the response has weight, even at the resolution that
+     already looked fine face-on. Found by actually plotting high-
+     inclination curves for `docs/thin_disk_response.md`, not by the unit
+     tests. The cap is safe (confirmed against an uncapped, far-higher-
+     resolution reference: max absolute difference ~2e-4) because the
+     Planck-derivative response weight decays exponentially in radius, so
+     nothing beyond ~20x `tau_ref` has any real weight to lose. If you
+     touch the radial grid again, re-run this comparison rather than
+     trusting the numeric tests alone -- they don't check smoothness.
+
+9. **`build_thin_disk_response_table`/`build_thin_disk_response_fast`
+   trade `thin_disk_response`'s accuracy for MCMC-usable speed, the same
+   way the author's PhD-era CREAM Fortran code did.** `thin_disk_response`
+   costs `O(n_r * n_phi * n_tau)` per call, recomputed on every NUTS
+   leapfrog step if used directly -- these precompute a table of responses
+   across an inclination grid *once* (at one reference `log_mdot`/
+   `wavelength`), then get any other inclination via linear interpolation
+   and any other `log_mdot`/`wavelength` by *stretching* the lag axis
+   according to `lag_scaling`'s own scaling law (`s = lag_scaling(...) /
+   tau_ref_reference`, evaluate the template at `tau_grid / s`, divide by
+   `s` to keep the area normalised). Confirmed ~90x faster per call at
+   matched resolution, with `jax.grad` still non-zero w.r.t. `log_mdot`
+   and `inclination` (checked on and off the precomputed inclination grid
+   points, same discipline as decision #7's gradient trap).
+
+   The stretch is a genuine approximation, not an identity: the ISCO
+   (`r_in`) is a fixed absolute length that doesn't stretch along with
+   everything else, so the ratio `r_in / tau_ref` -- and with it, how much
+   the inner-boundary term shapes the response -- differs between the
+   table's reference point and wherever a fit actually queries it. This
+   bites hardest exactly where the response is sharpest: high inclination,
+   far from the reference wavelength/`log_mdot`. Confirmed directly:
+   `inclination=85`, `wavelength=7000` (table built with the default
+   `reference_wavelength=5000`) is off by ~35% at the near-zero-lag spike's
+   *peak*, while the mean lag still tracks well and everywhere away from
+   the spike matches closely -- see `docs/thin_disk_response.md` section 5
+   and `tests/test_thin_disk_response_fast.py`'s
+   `test_fast_response_approximation_degrades_away_from_reference`. This
+   is a real, documented tradeoff to make deliberately (build the table
+   with a `reference_wavelength` close to the run's actual bands if the
+   posterior is expected to favour high inclination), not a bug to chase.
 
 ## Known rough edges / things to check before trusting results on real data
 

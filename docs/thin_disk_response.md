@@ -3,11 +3,13 @@
 `forward_model.thin_disk_response` is a physically-motivated alternative to
 the default skew-normal `response_function` (see the README's "Swapping the
 response function" section and `CLAUDE.md`'s design decisions #5 and #8).
-This document works through exactly how it is computed, step by step, and
+This document works through exactly how it is computed, step by step,
 shows the two scaling checks worth seeing on a chart rather than taking on
-faith: that inclination reshapes the response without moving its mean lag,
-and that the mean lag grows with accretion rate the way thin-disk theory
-says it should.
+faith (that inclination reshapes the response without moving its mean
+lag, and that the mean lag grows with accretion rate the way thin-disk
+theory says it should), and covers the precomputed-template fast path
+(`build_thin_disk_response_fast`, section 5) that makes it practical to
+use inside NUTS at all.
 
 It is a deterministic, JAX-differentiable adaptation of the Monte-Carlo
 disk integrator (the `tfbx`, `tr4visc` and `tr4irad` subroutines) in the
@@ -171,7 +173,95 @@ small `r`, for the same `n_r`. Raise `n_r`/`n_phi` (or plot a candidate
 `psi`) before trusting a fit that pushes `log_mdot` or `inclination` well
 outside the ranges checked here.
 
-## 5. Verification: the two charts
+**A second, related resolution issue: high inclination silently expands
+`r_max`.** `r_max` originally came from the largest radius that could
+geometrically contribute at `tau_grid[-1]`,
+`tau_grid[-1] / (1 - sin(inclination))` -- fine face-on, but at
+`inclination=80` degrees this is already ~66x larger than at
+`inclination=0` for the same `tau_grid`, and ~100x larger still at
+`inclination=89`. Since the radial grid is log-spaced over
+`[r_in, r_max]`, the same `n_r` is spread over a domain up to two orders of
+magnitude bigger, leaving it far too coarse right where the response
+actually has weight -- this, not `n_r` alone, is what was producing visible
+waviness in high-inclination curves even at otherwise-generous resolution.
+The fix is `r_max_factor` (default 20): `r_max` is capped at
+`r_max_factor * tau_ref` (`tau_ref` from :func:`lag_scaling`) regardless of
+how large the geometric formula would allow it to grow, since the Planck-
+derivative response weight (section 4) decays exponentially in radius and
+is already negligible well within 20x `tau_ref` -- confirmed directly
+against an uncapped, far-higher-resolution reference at `inclination=80`:
+maximum absolute difference ~2e-4, i.e. the cap discards no real signal
+while keeping the log-spaced grid concentrated where it matters.
+
+## 5. A precomputed, interpolated fast path for MCMC
+
+`thin_disk_response`'s O(n_r * n_phi * n_tau) disk integral is
+considerably more expensive than `response_function`'s closed form, and
+NUTS calls a band's response function on every leapfrog step of every
+sample -- recomputing the full integral that often is wasteful, since only
+`log_mdot` and `inclination` change step to step, not the disk's physics.
+
+`build_thin_disk_response_table` / `build_thin_disk_response_fast`
+implement the same fix the author used for this in the PhD-era CREAM
+Fortran code: precompute the response once, on a grid of inclinations
+(1-5 degree spacing, historically), at one reference accretion rate; then
+get any other inclination by interpolating that grid, and any other
+accretion rate (or wavelength) by *stretching* the lag axis according to
+the `mdot**(1/3)` / `wavelength**(4/3)` scaling `lag_scaling` already uses,
+rather than recomputing the disk integral at all:
+
+```python
+import echofit.model as model
+from echofit.forward_model import build_thin_disk_response_fast
+
+model.response_function = build_thin_disk_response_fast(M_BH=1e8)
+```
+
+Concretely, for a given `(log_mdot, wavelength, inclination)`:
+
+1. **Interpolate over inclination** (`jnp.interp`, linear, differentiable
+   in `inclination` almost everywhere) against the precomputed template
+   family, giving one dimensionless template on the table's own lag axis.
+2. **Stretch** that template by `s = lag_scaling(log_mdot, wavelength,
+   M_BH) / tau_ref_reference`: evaluate it at `tau_grid / s` and divide by
+   `s` to keep the area normalised to 1 under that change of variables.
+
+Both steps are lookups against fixed tables, `O(n_u + n_tau)` rather than
+`O(n_r * n_phi * n_tau)` -- confirmed directly at matched resolution
+(`n_r=400, n_phi=96`): **~90x faster per call**, with gradients w.r.t.
+`log_mdot` and `inclination` still non-zero (checked with `jax.grad`,
+including at an inclination *not* on the precomputed grid, the same
+discipline used for `thin_disk_response` and
+`tophat_response_free`'s gradients elsewhere in this codebase).
+
+**The stretch is an approximation, not identity, and it is honest to say
+so.** The disk isn't *exactly* self-similar under it: `r_in` (the ISCO) is
+a fixed absolute length, so it doesn't stretch along with everything else,
+meaning `r_in / tau_ref` -- and with it, how much the inner boundary
+term shapes the response -- genuinely differs between the table's
+reference point and wherever a fit actually queries it. In practice this
+shows up worst exactly where the response is sharpest: at high
+inclination, near the near-zero-lag spike from the disk's near side.
+
+![thin_disk_response, fast vs exact](images/thin_disk_response_fast_vs_slow.png)
+
+Near the table's own reference point (`log_mdot=0`, `wavelength=5000`
+Angstrom), the two curves are visually indistinguishable. Far from it
+(`inclination=85` degrees, `wavelength=7000` Angstrom, `log_mdot=-0.5`),
+the mean lag still tracks well (both integrate to area 1 by construction,
+and the bulk of the curve away from the spike matches closely), but the
+spike's *peak height* is off by about 35% -- exactly the kind of
+difference a full-width plot hides and only a zoomed one shows, which is
+why the right panel above is zoomed to the peak rather than the full
+range. If a fit's posterior is expected to live mostly at high inclination
+and/or spans multiple bands at very different wavelengths, either build
+the table with `reference_wavelength` set closer to the run's own
+wavelength(s), or use the exact `thin_disk_response` directly and accept
+the slower per-step cost. This tradeoff, not a hidden bug, is exactly what
+`tests/test_thin_disk_response_fast.py::test_fast_response_approximation_degrades_away_from_reference`
+checks for.
+
+## 6. Verification: the two scaling-law charts
 
 Both figures use a case-study disk with `M_BH = 1e8` solar masses and
 `wavelength = 5000` Angstrom (the same pivot values used throughout
@@ -227,23 +317,29 @@ section 2 already flags, the empirical mean lag sits above the
 `lag_scaling` reference radius at every `mdot` -- `lag_scaling` fixes the
 response's characteristic scale, not its exact mean.
 
-## 6. API summary
+## 7. API summary
 
 ```python
-from echofit.forward_model import thin_disk_response
+from echofit.forward_model import thin_disk_response, build_thin_disk_response_fast
 from echofit.responses import get_response
 import echofit.model as model
 
-# use it directly
+# use the exact disk integral directly
 psi = thin_disk_response(tau_grid, log_mdot, wavelength, inclination, M_BH)
 
 # or swap it in for "physical"-mode bands (see CLAUDE.md decision #5)
 model.response_function = get_response("thin_disk")
+
+# or use the fast, precomputed-template approximation (section 5) instead,
+# for a real fit where per-step cost matters
+model.response_function = build_thin_disk_response_fast(M_BH=1e8)
 ```
 
 See `thin_disk_response`'s own docstring in `forward_model.py` for the
 full parameter list (`viscous_slope`, `include_irradiation`,
-`irradiation_slope`, `irradiation_weight`, `n_r`, `n_phi`,
-`smoothing_days`), and `README.md`'s "Swapping the response function"
-section for how it relates to the default skew-normal and to
-`echofit/responses.py`'s registry.
+`irradiation_slope`, `irradiation_weight`, `n_r`, `n_phi`, `r_max_factor`,
+`smoothing_days`), `build_thin_disk_response_table`'s docstring for the
+fast path's own parameters (`incl_grid`, `reference_log_mdot`,
+`reference_wavelength`, `u_max_factor`, `n_u`), and `README.md`'s
+"Swapping the response function" section for how these relate to the
+default skew-normal and to `echofit/responses.py`'s registry.
