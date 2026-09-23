@@ -95,8 +95,11 @@ See `notebooks/demo.ipynb` for the full walkthrough.
 
 For a quick "did I break anything" check after touching `forward_model.py`,
 `model.py`, or `echofit.py`, run a short fit on synthetic data and save plots
-of the raw data, the inferred driving light curve, the posterior-predictive
-echo fit + response function per band, and MCMC trace diagnostics:
+of the raw data, the inferred driving light curve (extended 30 days before/
+after the data -- its credible band should widen there before saturating,
+since the driver is DRW-like), the posterior-predictive echo fit + response
+function per band, the driver's power spectrum against the fitted DRW prior
+and the w^-2 random-walk asymptote, and MCMC trace diagnostics:
 
 ```bash
 python scripts/smoke_test.py                # ~30-50s, 300 warmup + 300 samples

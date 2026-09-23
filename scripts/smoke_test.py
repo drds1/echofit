@@ -103,15 +103,18 @@ def main():
     print("Rendering plots...")
     fig_raw, _ = ef.plot_raw_lightcurves()
     fig_fits, _ = ef.plot_lightcurve_fits()
+    fig_power, _ = ef.plot_power_spectrum()
     fig_diag, _ = ef.plot_mcmc_diagnostics()
 
     paths = {
         "raw": args.outdir / "raw_lightcurves.png",
         "fits": args.outdir / "lightcurve_fits.png",
+        "power": args.outdir / "power_spectrum.png",
         "diagnostics": args.outdir / "mcmc_diagnostics.png",
     }
     fig_raw.savefig(paths["raw"], dpi=150, bbox_inches="tight")
     fig_fits.savefig(paths["fits"], dpi=150, bbox_inches="tight")
+    fig_power.savefig(paths["power"], dpi=150, bbox_inches="tight")
     fig_diag.savefig(paths["diagnostics"], dpi=150, bbox_inches="tight")
 
     report_path = args.outdir / "report.html"
@@ -144,8 +147,22 @@ code {{ background: #f2f2f2; padding: 1px 4px; }}
 
 <h2>Posterior-predictive fit + response function</h2>
 <p>Shaded bands are 68%/95% credible intervals; black points are the data. The
-right-hand panels are the inferred response function &psi;(&tau;) per band.</p>
+top panel is the inferred driving light curve (time-aligned with the bands
+below it), extended a bit before/after the data -- the credible band should
+widen roughly like t^(1/2) outside the data before saturating, since the
+driver is a DRW. The right-hand panels are the inferred response function
+&psi;(&tau;) per band.</p>
 <img src="{paths['fits'].name}">
+
+<h2>Driver power spectrum</h2>
+<p>Posterior P(&omega;) = (S<sup>2</sup>+C<sup>2</sup>)/(2&Delta;&omega;) per
+frequency (black) vs. the fitted DRW Lorentzian from posterior
+sigma_drw/tau_drw draws (blue dashed) and a plain &omega;<sup>-2</sup>
+random-walk reference (red dotted). These should roughly track each other --
+if the posterior power spectrum has already fully learned to follow the
+data instead of the prior almost everywhere, or diverges from the Lorentzian
+shape a lot, that's worth a closer look.</p>
+<img src="{paths['power'].name}">
 
 <h2>MCMC trace diagnostics</h2>
 <p>Traces should look like noisy horizontal bands (well-mixed), not

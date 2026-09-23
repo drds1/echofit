@@ -165,6 +165,26 @@ class EchoFit:
     def plot_raw_lightcurves(self, **kwargs):
         return plotting.plot_raw_lightcurves(self.bands, **kwargs)
 
+    def plot_power_spectrum(self, **kwargs):
+        """Posterior driver power spectrum vs. the fitted DRW prior shape.
+
+        Sanity check that the driver's Fourier coefficients (S, C) are
+        actually behaving like a DRW under the posterior, not just the
+        prior: P(w) = (S**2 + C**2) / (2*dw) should track the fitted
+        Lorentzian (from posterior sigma_drw/tau_drw draws) and flatten
+        into a w**-2 slope above 1/tau_drw.
+        """
+        if self.samples is None:
+            raise RuntimeError("Call .fit() before plotting the power spectrum.")
+        return plotting.plot_power_spectrum(
+            np.asarray(self.freqs),
+            np.asarray(self.samples["S"]),
+            np.asarray(self.samples["C"]),
+            np.asarray(self.samples["sigma_drw"]),
+            np.asarray(self.samples["tau_drw"]),
+            **kwargs,
+        )
+
     def plot_mcmc_diagnostics(self, param_names=None, **kwargs):
         if self.mcmc is None:
             raise RuntimeError("Call .fit() before plotting diagnostics.")
@@ -177,18 +197,32 @@ class EchoFit:
             param_names = scalar_like
         return plotting.plot_mcmc_diagnostics(samples_by_chain, param_names=param_names, **kwargs)
 
-    def plot_lightcurve_fits(self, n_fine: int = 200, n_pred_samples: int = 200, **kwargs):
+    def plot_lightcurve_fits(
+        self, n_fine: int = 200, n_pred_samples: int = 200, extrapolate_days: float = 30.0, **kwargs
+    ):
         """Draw posterior-predictive light curves and response functions.
 
         Subsamples up to ``n_pred_samples`` posterior draws for speed, and
         evaluates them (vectorized with ``jax.vmap``) on a dense time grid
-        per band plus the shared lag grid.
+        per band plus the shared lag grid. This all happens *after* ``.fit()``
+        -- extending ``extrapolate_days`` does not slow down NUTS, only the
+        (cheap, matrix-multiply) posterior-predictive evaluation here.
+
+        Parameters
+        ----------
+        extrapolate_days : float
+            Extend the plotted time range this far (days) before the first
+            and after the last observation, so the credible band's growth
+            outside the data is visible (for a DRW-like driver this should
+            look roughly like a t^(1/2) widening before saturating).
         """
         if self.samples is None:
             raise RuntimeError("Call .fit() before plotting fits.")
 
         all_t = np.concatenate([d["t"] for d in self.bands.values()])
-        t_fine = jnp.linspace(all_t.min(), all_t.max(), n_fine)
+        t_fine = jnp.linspace(
+            all_t.min() - extrapolate_days, all_t.max() + extrapolate_days, n_fine
+        )
 
         n_total = self.samples["log_mdot"].shape[0]
         idx = np.random.default_rng(0).choice(
