@@ -58,16 +58,35 @@ def test_free_band_with_driver_does_not_warn():
 
 def test_free_lag_recovery_with_driver_anchor():
     """The real payoff: with a driver light curve registered, a multi-line
-    free-lag fit should recover the *ordering* of the true lags (each
-    line's posterior-median tau in the same order as its true tau) --
-    exactly what test_shift_degeneracy.py shows is mathematically
-    impossible to guarantee without the driver anchoring the absolute
-    scale."""
+    free-lag fit should recover the true lags -- exactly what
+    test_shift_degeneracy.py shows is mathematically impossible without the
+    driver anchoring the absolute scale.
+
+    A *single* NUTS chain is not good enough evidence of that on its own:
+    a broad Uniform(0, tau_max) prior on each tau_{band}, combined with a
+    stochastic driver that has its own autocorrelation structure, gives a
+    genuinely multimodal likelihood -- a lone chain can converge cleanly
+    (0 divergences, tight posterior) while sitting in the *wrong* mode, which
+    looks deceptively healthy. Confirmed directly: at a sparser data budget
+    (35 obs/line, noise_level=0.05), 2 of 3 single-chain seeds recovered the
+    true lags almost exactly, but one converged confidently to values 3-4x
+    too large. Picking whichever seed happens to match a truth you already
+    know would be exactly the mistake this test exists to catch, not
+    validate -- on real data there's no known answer to seed-shop against.
+
+    The honest fix is what you'd actually have to do without knowing the
+    truth: run several independently-initialised chains and check they
+    *agree* (Gelman-Rubin R-hat) before trusting any of them. That's the
+    real assertion here; recovering the true values is checked only once
+    convergence is established.
+    """
+    from numpyro.diagnostics import summary
+
     data = generate_free_lag_dataset(
         lines={"line_a": 8.0, "line_b": 18.0, "line_c": 30.0},
         sigma_drw_true=0.3, tau_drw_true=25.0, t_span=200.0,
-        n_obs_per_line=35, n_obs_driver=70, include_driver=True,
-        n_freq=15, n_tau=150, tau_max=60.0, noise_level=0.05, seed=1,
+        n_obs_per_line=60, n_obs_driver=100, include_driver=True,
+        n_freq=15, n_tau=150, tau_max=60.0, noise_level=0.02, seed=1,
     )
     ef = EchoFit(M_BH=None)
     for name, d in data["bands"].items():
@@ -80,16 +99,26 @@ def test_free_lag_recovery_with_driver_anchor():
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        ef.fit(rng_seed=0, num_warmup=400, num_samples=400, progress_bar=False)
+        ef.fit(
+            rng_seed=0, num_warmup=400, num_samples=400,
+            num_chains=4, chain_method="vectorized", progress_bar=False,
+        )
 
     diverging = np.asarray(ef.extra_fields["diverging"])
     assert diverging.mean() < 0.1
 
-    recovered = {name: float(np.median(ef.samples[f"tau_{name}"])) for name in data["bands"]}
-    true_order = sorted(data["truth"]["bands"], key=lambda n: data["truth"]["bands"][n]["tau"])
-    recovered_order = sorted(recovered, key=lambda n: recovered[n])
-    assert recovered_order == true_order, (
-        f"recovered lag ordering {recovered_order} doesn't match true ordering {true_order} "
-        f"(recovered medians: {recovered}, true: "
-        f"{ {n: data['truth']['bands'][n]['tau'] for n in data['bands']} })"
-    )
+    diag = summary(ef._samples_by_chain, prob=0.9)
+    for name in data["bands"]:
+        r_hat = diag[f"tau_{name}"]["r_hat"]
+        assert r_hat < 1.05, (
+            f"tau_{name} r_hat={r_hat:.3f}: the 4 independently-initialised chains "
+            f"don't agree (didn't converge to the same mode), so nothing below this "
+            f"point can be trusted from this fit -- see this test's docstring."
+        )
+
+    for name, truth in data["truth"]["bands"].items():
+        recovered = float(np.median(ef.samples[f"tau_{name}"]))
+        assert abs(recovered - truth["tau"]) < 2.0, (
+            f"tau_{name} recovered={recovered:.2f} true={truth['tau']:.2f}: chains agree "
+            f"(R-hat is fine) but converged together on the wrong value."
+        )

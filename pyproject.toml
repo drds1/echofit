@@ -21,8 +21,13 @@ classifiers = [
 ]
 
 dependencies = [
-    "jax>=0.4.28",
-    "jaxlib>=0.4.28",
+    # Capped, not just floored: an unconstrained jax/jaxlib range can
+    # resolve to a version with no published wheel for a given platform
+    # (hit this directly with `poetry install` resolving to jaxlib 0.10.2,
+    # which has no compatible wheel on this machine) -- 0.4.x is the line
+    # this codebase is developed and tested against.
+    "jax>=0.4.28,<0.5",
+    "jaxlib>=0.4.28,<0.5",
     "numpyro>=0.15.0",
     "numpy>=1.24",
     "matplotlib>=3.7",
@@ -35,7 +40,7 @@ dependencies = [
 dev = ["pytest>=7.0", "jupyter", "ipykernel"]
 
 [project.urls]
-Homepage = "https://example.com/echofit"
+Homepage = "https://github.com/drds1/echofit"
 
 [tool.setuptools.packages.find]
 include = ["echofit*"]

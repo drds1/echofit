@@ -9,6 +9,9 @@ from echofit.forward_model import (
     driver_at,
 )
 
+# np.trapz was removed in NumPy 2.x in favour of np.trapezoid.
+_np_trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+
 
 def test_lag_scaling_increases_with_wavelength():
     M_BH = 1e8
@@ -33,7 +36,7 @@ def test_response_function_is_causal_and_normalised():
     psi_np = np.asarray(psi)
     tau_np = np.asarray(tau_grid)
     assert np.all(psi_np[tau_np < 0] == 0.0)
-    area = np.trapz(psi_np, tau_np)
+    area = _np_trapz(psi_np, tau_np)
     assert np.isclose(area, 1.0, atol=1e-2)
 
 
@@ -55,7 +58,7 @@ def test_compute_echo_matches_direct_convolution():
     echo_direct = []
     for t in np.asarray(t_obs):
         x_shifted = driver_at(S, C, freqs, jnp.asarray(t - np.asarray(tau_grid)))
-        echo_direct.append(np.trapz(np.asarray(psi) * np.asarray(x_shifted), np.asarray(tau_grid)))
+        echo_direct.append(_np_trapz(np.asarray(psi) * np.asarray(x_shifted), np.asarray(tau_grid)))
     echo_direct = np.array(echo_direct)
 
     assert np.allclose(np.asarray(echo_closed_form), echo_direct, atol=1e-2)

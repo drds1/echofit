@@ -18,6 +18,10 @@ import numpy as np
 from .forward_model import response_function, tophat_response_free, transfer_coeffs, compute_echo, driver_at
 from .grid_utils import estimate_dt_min
 
+# np.trapz was removed in NumPy 2.x in favour of np.trapezoid; this matches
+# the jnp.trapezoid/jnp.trapz fallback already used throughout forward_model.py.
+_np_trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+
 
 def make_frequency_grid(n_freq: int, t_span: float, dt_min: float) -> np.ndarray:
     """Log-spaced angular-frequency grid from the light-curve baseline up to
@@ -176,7 +180,7 @@ def generate_synthetic_dataset(
         per_band_truth[name] = {
             "S_band": S_band_true,
             "C_band": C_band_true,
-            "tau_mean": float(np.trapz(tau_grid * psi, tau_grid)),
+            "tau_mean": float(_np_trapz(tau_grid * psi, tau_grid)),
         }
 
     truth = {
