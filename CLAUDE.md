@@ -105,6 +105,93 @@ and package layout.
    add another free-form response family, check its gradient w.r.t.
    whatever parameter NUTS samples before trusting a fit that used it.
 
+8. **`thin_disk_response` and `echofit/responses.py` are a second
+   `lag_mode="physical"` response family, not a new mechanism.** They plug
+   into the *existing* swap point from decision #5
+   (`echofit.model.response_function = ...`) -- `echofit/responses.py` is
+   only a small registry (`register_response`/`get_response`) for
+   discoverability, it does not change how a response actually gets wired
+   into a fit. `thin_disk_response` is a JAX-differentiable, deterministic-
+   quadrature adaptation of the Monte-Carlo disk integrator (`tfbx` +
+   `tr4visc`/`tr4irad`) in the author's PhD-era CREAM Fortran code
+   (`pycecream`'s `cream_f90.f90`): real Shakura-Sunyaev viscous (+ optional
+   lamppost-irradiation) temperature profile, the disk's own light-travel-
+   time delay surface `tau(r, phi) = r(1 + sin(inclination) cos(phi))`, and
+   a Planck-derivative response weighting -- genuine physics, not an
+   assumed shape, unlike the default skew-normal. Two adaptation choices
+   worth knowing before touching it:
+   - It reuses `lag_scaling(log_mdot, wavelength, M_BH)` for its absolute
+     lag scale (the "Wien radius"), rather than independently deriving an
+     Eddington-ratio-to-Mdot conversion from scratch. This was deliberate:
+     an independent derivation would give `log_mdot` a second, incompatible
+     meaning depending which response a band used. Only the inner (ISCO)
+     radius uses real physical constants (G, c, M_sun) directly, since that
+     conversion doesn't need any extra accretion-rate calibration.
+   - Like `tophat_response_free`, it must stay a *smoothed* (Gaussian
+     kernel) deposit of disk-grid points onto `tau_grid`, never a hard
+     histogram/binning -- same zero-gradient trap as decision #7's "already
+     hit once", confirmed again here with `jax.grad` before considering the
+     function done (see `tests/test_thin_disk_response.py`).
+   - It costs `O(n_r * n_phi * n_tau)` per evaluation (a real
+     radius/azimuth integral) versus the skew-normal's closed form, so it's
+     an optional, heavier alternative -- not a default-swap candidate for
+     routine fits without checking the cost is acceptable.
+   - `n_r`/`n_phi` default to 50/64, not something smaller -- an earlier
+     40/24 default looked fine on the causality/normalisation/gradient
+     tests (none of which check smoothness) but produced a visibly jagged,
+     under-converged psi once actually plotted for `docs/thin_disk_response.md`
+     (each radius only contributing 24 distinct azimuth samples). Confirmed
+     by comparing 40x24/50x64/60x120 side by side: 50x64 is already
+     converged onto the same curve as 60x120. Don't drop below ~50x64
+     without re-checking a plotted psi, not just the numeric tests.
+   - `r_max` is capped at `r_max_factor * tau_ref` (default 20x), not left
+     as the uncapped `tau_grid[-1] / (1 - sin(inclination))` geometric
+     formula -- that formula alone made high-inclination curves ~66x-100x
+     wider in radial domain than a face-on one on the same `tau_grid` (at
+     80/89 degrees respectively), spreading the same log-spaced `n_r`
+     across a domain two orders of magnitude bigger and leaving it visibly
+     wavy right where the response has weight, even at the resolution that
+     already looked fine face-on. Found by actually plotting high-
+     inclination curves for `docs/thin_disk_response.md`, not by the unit
+     tests. The cap is safe (confirmed against an uncapped, far-higher-
+     resolution reference: max absolute difference ~2e-4) because the
+     Planck-derivative response weight decays exponentially in radius, so
+     nothing beyond ~20x `tau_ref` has any real weight to lose. If you
+     touch the radial grid again, re-run this comparison rather than
+     trusting the numeric tests alone -- they don't check smoothness.
+
+9. **`build_thin_disk_response_table`/`build_thin_disk_response_fast`
+   trade `thin_disk_response`'s accuracy for MCMC-usable speed, the same
+   way the author's PhD-era CREAM Fortran code did.** `thin_disk_response`
+   costs `O(n_r * n_phi * n_tau)` per call, recomputed on every NUTS
+   leapfrog step if used directly -- these precompute a table of responses
+   across an inclination grid *once* (at one reference `log_mdot`/
+   `wavelength`), then get any other inclination via linear interpolation
+   and any other `log_mdot`/`wavelength` by *stretching* the lag axis
+   according to `lag_scaling`'s own scaling law (`s = lag_scaling(...) /
+   tau_ref_reference`, evaluate the template at `tau_grid / s`, divide by
+   `s` to keep the area normalised). Confirmed ~90x faster per call at
+   matched resolution, with `jax.grad` still non-zero w.r.t. `log_mdot`
+   and `inclination` (checked on and off the precomputed inclination grid
+   points, same discipline as decision #7's gradient trap).
+
+   The stretch is a genuine approximation, not an identity: the ISCO
+   (`r_in`) is a fixed absolute length that doesn't stretch along with
+   everything else, so the ratio `r_in / tau_ref` -- and with it, how much
+   the inner-boundary term shapes the response -- differs between the
+   table's reference point and wherever a fit actually queries it. This
+   bites hardest exactly where the response is sharpest: high inclination,
+   far from the reference wavelength/`log_mdot`. Confirmed directly:
+   `inclination=85`, `wavelength=7000` (table built with the default
+   `reference_wavelength=5000`) is off by ~35% at the near-zero-lag spike's
+   *peak*, while the mean lag still tracks well and everywhere away from
+   the spike matches closely -- see `docs/thin_disk_response.md` section 5
+   and `tests/test_thin_disk_response_fast.py`'s
+   `test_fast_response_approximation_degrades_away_from_reference`. This
+   is a real, documented tradeoff to make deliberately (build the table
+   with a `reference_wavelength` close to the run's actual bands if the
+   posterior is expected to favour high inclination), not a bug to chase.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model
@@ -163,6 +250,21 @@ and package layout.
   its docstring. With more/cleaner data (60 obs/line, `noise_level=0.02`)
   4 chains converge cleanly (R-hat ~1.0) to the true lags -- multimodality
   risk trades off against how constraining the data actually is.
+- **Running `pytest` in a background/headless shell can crash on exit if
+  matplotlib's default backend is interactive.** `tests/test_response_function_swap.py`
+  calls `EchoFit.plot_lightcurve_fits()` without ever closing the returned
+  figure; on a machine where matplotlib's default backend is `TkAgg` (true
+  on at least one contributor's Mac), this creates real Tk windows against
+  the active display even from a non-interactive test run. If that process
+  is then killed (e.g. a `timeout` wrapper cutting off a background run
+  before the ~10-minute full suite finishes), Python's interpreter teardown
+  can hit a Tcl/Tk finalisation bug (`PyEval_RestoreThread: NULL tstate`)
+  and abort with `SIGABRT`, a visible crash dialog with no connection to
+  whatever test was actually running. Run `pytest` with `MPLBACKEND=Agg`
+  set (and give it enough time to finish) in any headless/background
+  context to avoid this; it's an invocation-time fix, not a reason to
+  force a non-interactive backend inside `plotting.py` itself, which would
+  break interactive use from the notebook.
 - **Dependency versions matter more than they look like they should for
   this stack.** `jax`/`jaxlib` are pinned `>=0.4.28,<0.5` (not just
   floored) because an unconstrained range let `poetry install` resolve to
