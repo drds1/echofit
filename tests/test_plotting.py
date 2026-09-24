@@ -47,6 +47,30 @@ def test_plot_fourier_correlation_handles_pooled_or_by_chain_shapes():
     assert len(axes) == 2
 
 
+def test_plot_fourier_correlation_handles_zero_variance_frequencies():
+    """A frequency stuck at (or near) a constant value -- a too-short
+    warmup, or a DRW prior that suppresses the highest frequencies enough
+    for this to happen in practice -- makes a raw correlation coefficient
+    a 0/0 division. This should come back as a plain 0.0, not numpy's nan
+    (which would otherwise raise a RuntimeWarning and leave unexplained
+    gaps in the heatmap)."""
+    rng = np.random.default_rng(0)
+    n_freq = 6
+    freqs = np.geomspace(0.05, 3.0, n_freq)
+    S = rng.normal(0.0, 1.0, size=(100, n_freq))
+    S[:, 2] = 0.0  # exactly zero variance at one frequency
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any warning (e.g. the divide-by-zero) fails the test
+        fig, axes = plotting.plot_fourier_correlation(S, S, freqs)
+
+    # sanity check that this setup really does exercise the nan-producing
+    # case (i.e. the test isn't accidentally vacuous)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        raw_corr = np.corrcoef(S, rowvar=False)
+    assert np.isnan(raw_corr[2, :]).any()
+
+
 def _tiny_physical_fit():
     from echofit.synthetic import generate_synthetic_dataset
     from echofit.echofit import EchoFit

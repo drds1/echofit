@@ -437,12 +437,23 @@ def plot_fourier_correlation(S_samples: np.ndarray, C_samples: np.ndarray, freqs
         before computing the correlation matrix).
     freqs : (n_freq,) array
         Driver angular frequency grid (rad/day), for axis labelling.
+
+    Notes
+    -----
+    A frequency whose posterior samples have ~zero variance (the DRW prior
+    can suppress the highest frequencies enough for this to happen, and a
+    too-short warmup can leave a coefficient stuck near its initial value)
+    would make a raw correlation coefficient a 0/0 division -- caught here
+    and shown as exactly 0 (no defined correlation) rather than left as
+    ``numpy``'s ``nan``, which would otherwise leave unexplained gaps in
+    the heatmap and raise a ``RuntimeWarning``.
     """
     S = np.asarray(S_samples).reshape(-1, np.asarray(S_samples).shape[-1])
     C = np.asarray(C_samples).reshape(-1, np.asarray(C_samples).shape[-1])
 
-    corr_S = np.corrcoef(S, rowvar=False)
-    corr_C = np.corrcoef(C, rowvar=False)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        corr_S = np.nan_to_num(np.corrcoef(S, rowvar=False), nan=0.0, posinf=0.0, neginf=0.0)
+        corr_C = np.nan_to_num(np.corrcoef(C, rowvar=False), nan=0.0, posinf=0.0, neginf=0.0)
 
     fig, axes = plt.subplots(1, 2, figsize=figsize)
     tick_idx = np.linspace(0, len(freqs) - 1, min(6, len(freqs))).astype(int)
