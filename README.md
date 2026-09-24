@@ -3,14 +3,16 @@
 `echofit` is an AGN light curve fitting code that uses MCMC (via
 [JAX](https://github.com/google/jax) + [NumPyro](https://num.pyro.ai/)) to
 model multi-band light curves as a lagged echo of a lamppost-driven
-accretion disk (the disk-reprocessing model of Krolik et al. 1991, ApJ,
-371, 541 and Cackett, Horne & Winkler 2007, MNRAS, 380, 669; see also
-Starkey, Horne & Villforth 2016, MNRAS, 456, 1960,
-[arXiv:1511.06162](https://arxiv.org/abs/1511.06162), whose disk-response
-model this code implements), inferring the posterior probability
-distributions of a physically motivated disk model's parameters: accretion
-rate (`mdot`), inclination, and temperature profile. Read on for install
-instructions, tests on synthetic data, and example usage.
+accretion disk[^1], inferring the posterior probability distributions of a
+physically motivated disk model's parameters: accretion rate (`mdot`),
+inclination, and temperature profile. Read on for install instructions,
+tests on synthetic data, and example usage.
+
+[^1]: The disk-reprocessing model of Krolik et al. 1991, ApJ, 371, 541 and
+    Cackett, Horne & Winkler 2007, MNRAS, 380, 669; see also Starkey, Horne
+    & Villforth 2016, MNRAS, 456, 1960,
+    [arXiv:1511.06162](https://arxiv.org/abs/1511.06162), whose
+    disk-response model this code implements.
 
 ## 🗂️ Contents
 
