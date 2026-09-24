@@ -1,12 +1,12 @@
 # echofit
 
-`echofit` fits brightness variations observed in an active galactic nucleus
-(AGN) at different wavelengths to work out how far each waveband's
-emitting region sits from the black hole, by measuring the time delay
-between them. In the field's own terms: Bayesian modelling of AGN
-reverberation-mapping light curves as a delayed, smoothed echo of an
-unobserved driving (lamppost) X-ray light curve, built on
-[JAX](https://github.com/google/jax) + [NumPyro](https://num.pyro.ai/).
+`echofit` is an AGN light curve fitting code that uses MCMC (via
+[JAX](https://github.com/google/jax) + [NumPyro](https://num.pyro.ai/)) to
+model multi-band light curves as a lagged echo of a lamppost-driven
+accretion disk, inferring the posterior probability distributions of a
+physically motivated disk model's parameters: accretion rate (`mdot`),
+inclination, and temperature profile. Read on for install instructions,
+tests on synthetic data, and example usage.
 
 ## Contents
 
