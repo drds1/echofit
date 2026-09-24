@@ -4,6 +4,23 @@ Bayesian modelling of AGN reverberation-mapping light curves as a delayed,
 smoothed echo of an unobserved driving (lamppost) X-ray light curve, built on
 [JAX](https://github.com/google/jax) + [NumPyro](https://num.pyro.ai/).
 
+## Contents
+
+- [Background](#background)
+- [Model](#model)
+- [Package layout](#package-layout)
+- [Install](#install)
+  - [1. Check you have Python 3.10 or newer](#1-check-you-have-python-310-or-newer)
+  - [2. Install Poetry](#2-install-poetry)
+  - [3. Get the code and install its dependencies](#3-get-the-code-and-install-its-dependencies)
+  - [4. Run things with `poetry run`](#4-run-things-with-poetry-run)
+- [Quickstart](#quickstart)
+- [Fitting your own light curves, with saved/resumable runs](#fitting-your-own-light-curves-with-savedresumable-runs)
+- [Visual smoke test](#visual-smoke-test)
+- [Swapping the response function](#swapping-the-response-function)
+- [Emission-line / free-lag mode and driver light curves](#emission-line--free-lag-mode-and-driver-light-curves)
+- [Status / caveats](#status--caveats)
+
 ## Background
 
 Active galactic nuclei (AGN) are powered by gas accreting onto a
@@ -289,9 +306,56 @@ See `notebooks/demo.ipynb` for the full walkthrough.
 
 ## Fitting your own light curves, with saved/resumable runs
 
-Pass `title=` (e.g. an AGN name) to have `EchoFit` manage on-disk outputs
-for the run -- data, config, periodic checkpoints, the final posterior, and
-the same visual report as the smoke test:
+**From the terminal, with no Python required:** `scripts/fit_lightcurves.py`
+wraps everything below as a command-line tool, reading each band's light
+curve from a plain text file, three columns `t y yerr` (whitespace- or
+comma-separated, one observation per line, `#`-prefixed lines ignored --
+time in days, on a consistent zero-point across every band):
+
+```bash
+python scripts/fit_lightcurves.py \
+    --title ngc_5548 --m-bh 1e8 \
+    --band g 4770 data/g_band.txt --band i 7625 data/i_band.txt \
+    --num-warmup 1000 --num-samples 2000 --checkpoint-every 200
+```
+
+`--band NAME WAVELENGTH PATH` is repeatable (one per band); the full
+argument list also covers `--free-lag-band`/`--driver` (see "Emission-line
+/ free-lag mode" below), `--num-chains`/`--chain-method`/`--max-tree-depth`,
+`--report-every`, `--output-dir`, `--n-freq`/`--n-tau`/`--tau-max`, and
+`--resume` -- run `python scripts/fit_lightcurves.py --help` for all of it.
+
+**`scripts/run_example_fit.sh` is a complete, runnable command file** built
+on that CLI -- a template to copy and adapt for a real campaign rather than
+writing one from scratch. Run it directly:
+
+```bash
+./scripts/run_example_fit.sh
+```
+
+It runs four steps in sequence, each one a plain `python scripts/...`
+invocation you can copy out individually:
+
+1. `scripts/make_example_data.py` writes a synthetic two-band dataset to
+   `example_data/*.txt` in the CLI's expected format -- swap this step out
+   for your own light curve files.
+2. A managed/checkpointed fit (`--title example_ngc`, `--checkpoint-every
+   100 --report-every 200`), writing everything to
+   `outputs/example_ngc/run_<timestamp>/` as described below.
+3. `--resume`-ing that same run (a no-op here since step 2 already finished
+   -- this is the command to re-run after a crash or interruption instead).
+4. A quick, non-checkpointed 4-chain diagnostic fit (`--num-chains 4
+   --chain-method vectorized`, no `--title`), for R-hat/ESS convergence
+   checks rather than a production run, writing a one-off report to
+   `diagnostic_run/`.
+
+Each step prints where its `report.html` landed; open it in a browser to
+see the fit.
+
+**From Python directly:** pass `title=` (e.g. an AGN name) to have
+`EchoFit` manage on-disk outputs for the run -- data, config, periodic
+checkpoints, the final posterior, and the same visual report as the smoke
+test:
 
 ```python
 ef = EchoFit(M_BH=1e8, title="ngc_5548")
