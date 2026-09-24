@@ -58,7 +58,9 @@ problem" that better lag measurements, not just better spectra, can help
 resolve.
 
 [^2]: De Rosa et al. 2015, ApJ, 806, 128 (project overview); Fausnaugh et
-    al. 2016, ApJ, 821, 56 (the continuum lags/disk-size result itself).
+    al. 2016, ApJ, 821, 56 (the continuum lags/disk-size result itself);
+    Starkey et al. 2017, ApJ, 835, 65 (STORM Paper VI, fitting reverberating
+    disk models directly to the campaign's light curves with CREAM).
 
 [^3]: Shen et al. 2015, ApJS, 216, 4 (project overview); Grier et al. 2017,
     ApJ, 851, 21 (the continuum-lag disk-size result itself).
