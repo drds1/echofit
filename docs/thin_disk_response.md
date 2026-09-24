@@ -212,11 +212,14 @@ it wasn't good enough, not as current guidance). None of that grid/cutoff
 machinery is needed here: there is no radial grid to under-resolve and no
 truncation to get wrong, because the radial integral was never
 approximated -- it was solved. Removing the radial dimension also drops
-the cost from `O(n_r * n_phi * n_tau)` to `O(n_phi * n_tau)`, confirmed
-**~25x faster per call** at matched quality, with `n_phi=200` (the current
-default) already fully converged where the old implementation needed
-`n_r=400` *and* still showed residual artefacts at extreme inclination or
-accretion rate.
+the cost from `O(n_r * n_phi * n_tau)` to `O(n_phi * n_tau)`, with
+`n_phi=200` (the current default) already fully converged where the old
+implementation needed `n_r=400` *and* still showed residual artefacts at
+extreme inclination or accretion rate. (An early draft of this section
+also quoted a specific "~25x faster" number for this step; that was
+measured the wrong way -- see section 7's methodology-correction note --
+and isn't repeated here since the old grid implementation no longer
+exists to re-measure properly.)
 
 ## 5. Gaussian smoothing: a deliberate reintroduction
 
@@ -395,21 +398,48 @@ order brings that back under 1%.
 
 Both interpolation steps are lookups against fixed tables, `O(n_u +
 n_tau)` rather than `O(n_phi * n_tau)`, plus the same `O(n_tau^2)`
-smoothing convolution `thin_disk_response` itself now also pays for. Since
-that convolution is a real, comparable cost either way, the fast path's
-relative speedup has shrunk twice over: ~90x faster per call immediately
-after this feature first shipped (against the old `O(n_r * n_phi *
-n_tau)` grid integral), then ~4x once section 4's analytic rewrite alone
-made the plain version cheap, and now **confirmed only ~1.3-1.5x faster**
-now that smoothing adds a shared cost to both (precomputing the table
-itself still takes ~3 seconds). It is still a real, essentially-free win
-at call time, just a genuinely modest one now -- for most fits, calling
-`thin_disk_response` directly is fast enough on its own, and the fast path
-is worth reaching for mainly on long runs where every bit of per-step cost
-compounds. Gradients w.r.t. `log_mdot` and `inclination` are still
-non-zero (checked with `jax.grad`, including at an inclination *not* on
-the precomputed grid, the same discipline used for `thin_disk_response`
-and `tophat_response_free`'s gradients elsewhere in this codebase).
+smoothing convolution `thin_disk_response` itself now also pays for.
+
+**A methodology correction, worth being upfront about:** every speed
+number in earlier drafts of this section (and of `CLAUDE.md`'s matching
+design decisions) was measured with plain, eager (non-`jax.jit`) repeated
+Python calls -- not what actually happens inside a NUTS fit, where
+NumPyro `jax.jit`-compiles the whole log-density function once and every
+leapfrog step reuses that compiled executable, none of eager timing's
+per-call Python dispatch overhead included. Checked directly: at
+`n_tau=600`, an eager call to `thin_disk_response` took ~134ms; the exact
+same call through `jax.jit` took ~2.6ms, a ~50x gap that has nothing to
+do with either function's real cost. The old "~90x -> ~4x -> ~1.3-1.5x"
+progression this section used to report is unreliable as a result, and
+in fact went the *wrong direction* at at least one point: re-measured
+under `jax.jit`, right after section 4's analytic rewrite but before this
+section's smoothing was reintroduced, the fast path was actually **~13x
+faster**, not the ~4x the eager measurement had claimed.
+
+**Properly measured now** (`jax.jit`, `n_tau=400`, matching
+`EchoFit.build_grid()`'s own default): `thin_disk_response` (with default
+smoothing) costs ~1.5ms per call, the templated fast path ~0.55ms --
+**~2.8x faster**, with a range of roughly 2x-5x depending on `n_tau`
+(checked at 150/400/600; precomputing the table itself still takes ~3
+seconds regardless). Smoothing itself turns out to add real, non-negligible
+cost once jitted (~1.5x over `smoothing_days=0.0`, where the eager
+measurement had suggested it was nearly free). Both `thin_disk_response`
+variants remain substantially more expensive than the closed-form
+`response_function` even fast and jitted -- ~12x for the templated path,
+~34x for the plain one, at the same settings -- confirming this is an
+inherent cost of doing a real disk integral rather than an assumed
+closed-form shape, not something either optimisation removes. Still a
+real, essentially-free win at call time over the plain version, worth
+reaching for on long runs where every bit of per-step cost compounds, but
+not a way to make `thin_disk_response` competitive with the skew-normal's
+cost -- see `CLAUDE.md` decision #9 for a note on a banded/truncated
+smoothing kernel that was prototyped and found faster still, but has a
+real edge-handling bug and wasn't pursued given how small the absolute
+costs already are once properly jitted. Gradients w.r.t. `log_mdot` and
+`inclination` are still non-zero (checked with `jax.grad`, including at
+an inclination *not* on the precomputed grid, the same discipline used
+for `thin_disk_response` and `tophat_response_free`'s gradients elsewhere
+in this codebase).
 
 **The stretch is still an approximation, not an identity, independent of
 smoothing.** The disk isn't *exactly* self-similar under it: `r_in` (the
@@ -435,8 +465,8 @@ near-reference one). If a fit's posterior is expected to live mostly at
 high inclination and/or spans multiple bands at very different
 wavelengths, building the table with `reference_wavelength` set closer to
 the run's own wavelength(s) narrows this further; using the exact
-`thin_disk_response` directly removes it entirely, at the now-modest
-~1.3-1.5x per-step cost difference from above. This tradeoff, not a hidden
+`thin_disk_response` directly removes it entirely, at the ~2-5x per-step
+cost difference from above. This tradeoff, not a hidden
 bug, is exactly what
 `tests/test_thin_disk_response_fast.py::test_fast_response_approximation_degrades_away_from_reference`
 checks for.

@@ -116,7 +116,7 @@ echofit/
                           latter supports checkpointing/resuming)
     echofit.py           EchoFit: main user-facing class
     plotting.py          plot_raw_lightcurves, plot_lightcurve_fits, plot_power_spectrum,
-                          plot_mcmc_diagnostics
+                          plot_mcmc_diagnostics, plot_corner, plot_fourier_correlation
     reporting.py          generate_report: shared plots + report.html generation,
                           used by both EchoFit(title=...) and scripts/smoke_test.py
     run_manager.py        on-disk run layout, output-dir resolution, checkpoint
@@ -259,7 +259,23 @@ ef.plot_raw_lightcurves()
 ef.plot_lightcurve_fits()
 ef.plot_power_spectrum()
 ef.plot_mcmc_diagnostics()
+ef.plot_corner()              # log_mdot / inclination, coloured per chain
+ef.plot_corner_bands()        # S_band / C_band (offset/stretch) for every band
+ef.plot_corner_free_lag()     # tau_band, only if any band used lag_mode="free"
+ef.plot_fourier_correlation() # driver Fourier coefficient correlation heatmap
 ```
+
+`plot_corner`/`plot_corner_bands`/`plot_corner_free_lag` are pairwise
+posterior corner plots (joint scatter + 1-D marginals), coloured per chain
+and, for synthetic data, overlaid with the true value -- in the style of
+Starkey, Horne & Villforth (2016) Figure 6. `plot_fourier_correlation` is
+the scalable stand-in for a corner plot on the driver's Fourier
+coefficients (`S`/`C`), which are one vector-valued site each rather than
+individually-named scalars and often number in the tens -- a correlation
+heatmap answers the same "is the posterior geometry sane" question a
+corner plot would, without needing `n_freq` scatter panels. All four are
+included automatically in `report.html` (see below), the disk-parameter
+and free-lag ones only when the fit actually has those parameters.
 
 See `notebooks/demo.ipynb` for the full walkthrough.
 
@@ -389,9 +405,12 @@ on `tau_grid`. Two are built in:
   other accretion rate/wavelength by *stretching* the lag axis according
   to `lag_scaling`'s own `mdot**(1/3)`/`wavelength**(4/3)` law, the same
   precompute-and-stretch trick used in the author's PhD-era CREAM code --
-  confirmed ~1.3-1.5x faster per call (a much smaller win than it used to
-  be, now that the plain version got cheap enough on its own that the
-  smoothing convolution is a comparable cost either way):
+  confirmed (properly, via `jax.jit`, matching how NUTS actually calls it --
+  see `docs/thin_disk_response.md` section 7 for why that distinction
+  matters) roughly 2-5x faster per call depending on grid size, though
+  both `thin_disk_response` variants remain tens of times more expensive
+  than the closed-form skew-normal even so, an inherent cost of a real
+  disk integral rather than something either optimisation removes:
 
   ```python
   from echofit.forward_model import build_thin_disk_response_fast
@@ -402,7 +421,7 @@ on `tau_grid`. Two are built in:
   The stretch is an approximation (the disk's inner edge is a fixed
   absolute radius, so it doesn't stretch too), worst at high inclination
   far from the table's reference accretion rate/wavelength -- see
-  `docs/thin_disk_response.md` section 5 for exactly how much that costs
+  `docs/thin_disk_response.md` section 7 for exactly how much that costs
   in accuracy and when to use the exact `thin_disk_response` instead.
 
 `echofit.responses.register_response(name, fn)` registers your own

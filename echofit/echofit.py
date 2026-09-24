@@ -504,6 +504,63 @@ class EchoFit:
             param_names = scalar_like
         return plotting.plot_mcmc_diagnostics(samples_by_chain, param_names=param_names, **kwargs)
 
+    def plot_corner(self, param_names=("log_mdot", "inclination"), true_values=None, **kwargs):
+        """Corner plot (pairwise joint posteriors + marginals, coloured per
+        chain) -- see :func:`plotting.plot_corner`. Defaults to
+        ``log_mdot``/``inclination`` (present only if at least one band
+        used ``lag_mode="physical"``); pass e.g.
+        ``param_names=("tau_line_a", "tau_line_b")`` for a free-lag fit.
+        """
+        if self._samples_by_chain is None:
+            raise RuntimeError("Call .fit() before plotting the corner plot.")
+        return plotting.plot_corner(
+            self._samples_by_chain, param_names=param_names, true_values=true_values, **kwargs
+        )
+
+    def plot_corner_bands(self, true_values=None, **kwargs):
+        """Corner plot of every band's offset/stretch parameters
+        (``S_{band}``, ``C_{band}`` -- the linear scale/offset absorbing
+        each band's own flux calibration, per ``model.reverberation_model``'s
+        per-band loop). Band names come from ``self.bands``, so this always
+        covers every band in the fit, however many there are.
+        """
+        if self._samples_by_chain is None:
+            raise RuntimeError("Call .fit() before plotting the corner plot.")
+        param_names = [f"{p}_{name}" for name in self.bands for p in ("S", "C")]
+        return plotting.plot_corner(
+            self._samples_by_chain, param_names=param_names, true_values=true_values, **kwargs
+        )
+
+    def plot_corner_free_lag(self, true_values=None, **kwargs):
+        """Corner plot of every ``lag_mode="free"`` band's independently
+        inferred lag (``tau_{band}``) -- the top-hat centroid parameters
+        (see ``forward_model.tophat_response_free``). Raises if no band in
+        this fit used ``lag_mode="free"``.
+        """
+        if self._samples_by_chain is None:
+            raise RuntimeError("Call .fit() before plotting the corner plot.")
+        free_lag_bands = [name for name, d in self.bands.items() if d["lag_mode"] == "free"]
+        if not free_lag_bands:
+            raise ValueError("plot_corner_free_lag: no lag_mode=\"free\" bands in this fit.")
+        param_names = [f"tau_{name}" for name in free_lag_bands]
+        return plotting.plot_corner(
+            self._samples_by_chain, param_names=param_names, true_values=true_values, **kwargs
+        )
+
+    def plot_fourier_correlation(self, **kwargs):
+        """Posterior correlation matrix of the driver's Fourier
+        coefficients -- see :func:`plotting.plot_fourier_correlation` for
+        why this is a heatmap rather than a corner plot (``S``/``C`` are
+        each one vector-valued site with ``n_freq`` components, not
+        individually-named scalar sites, and ``n_freq`` is often in the
+        tens).
+        """
+        if self.samples is None:
+            raise RuntimeError("Call .fit() before plotting the Fourier correlation.")
+        return plotting.plot_fourier_correlation(
+            self.samples["S"], self.samples["C"], np.asarray(self.freqs), **kwargs
+        )
+
     def plot_lightcurve_fits(
         self, n_fine: int = 200, n_pred_samples: int = 200, extrapolate_days: float = 30.0, **kwargs
     ):

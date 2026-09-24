@@ -43,6 +43,7 @@ def test_title_run_writes_expected_outputs(tmp_path):
     for fname in (
         "manifest.json", "data.npz", "grid.npz", "chains.npz", "report.html",
         "raw_lightcurves.png", "lightcurve_fits.png", "power_spectrum.png", "mcmc_diagnostics.png",
+        "corner.png", "corner_bands.png", "fourier_correlation.png",
         "checkpoint/samples.npz", "checkpoint/extra_fields.npz", "checkpoint/state.pkl",
     ):
         assert (ef.run_dir / fname).exists(), f"missing {fname}"

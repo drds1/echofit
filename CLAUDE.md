@@ -137,8 +137,12 @@ and package layout.
    user report that high-inclination curves still looked wrong even after
    the `r_max` cap fix below (turned out to be real residual radial-grid
    artefacts, now gone entirely), and a direct request to derive an
-   analytic form for speed. Confirmed ~25x faster per call than the old
-   grid version, `jax.grad` still non-zero w.r.t. `log_mdot` and
+   analytic form for speed. Removing the radial dimension cut a real
+   `O(n_r * n_phi * n_tau)` compute cost down to `O(n_phi * n_tau)` --
+   an exact multiple wasn't re-verified under `jax.jit` before the old
+   grid version was deleted (see decision #9's "a methodology correction"
+   paragraph for why an eager-mode number here would be unreliable
+   regardless), `jax.grad` still non-zero w.r.t. `log_mdot` and
    `inclination` (checked including at `inclination=89`, near the `sin=1`
    edge). With smoothing off (`smoothing_days=0.0`, see below), the
    mean-lag inclination-independence from decision #4 is exact to <1%
@@ -245,19 +249,50 @@ and package layout.
    inclination grid points, same discipline as decision #7's gradient
    trap).
 
-   **The relative speedup shrank a lot, twice.** First when decision #8's
-   analytic rewrite made the plain `thin_disk_response` itself ~25x
-   cheaper (~90x faster per call, down to ~4x); then again when the
-   smoothing paragraph above added a Gaussian-convolution step to *both*
-   the plain and the templated versions, since it's a real, comparable
-   cost (an `n_tau x n_tau` matmul) either way -- now confirmed only
-   ~1.3-1.5x faster per call, with precompute taking ~3 seconds. It's
-   still a real, essentially-free win at call time (two `jnp.interp`
-   lookups plus one smoothing convolution, versus a real azimuthal
-   integral plus the same convolution), just a genuinely modest one now --
-   calling `thin_disk_response` directly is fast enough for most fits on
-   its own; reach for the fast path mainly on long runs where every bit of
-   per-step cost compounds.
+   **A methodology correction, worth flagging explicitly:** every speed
+   number in this file and `docs/thin_disk_response.md` up to this point
+   was measured with plain, eager (non-`jax.jit`) repeated Python calls --
+   which is *not* what happens inside a real NUTS fit, where NumPyro
+   `jax.jit`-compiles the whole log-density function once and every
+   leapfrog step reuses that compiled executable with none of the
+   per-call Python dispatch overhead eager timing includes. Checked
+   directly: at `n_tau=600`, an eager call to `thin_disk_response` took
+   ~134ms; the *same* call through `jax.jit` took ~2.6ms -- a ~50x gap
+   that has nothing to do with the function's real cost. This means the
+   ~90x/~4x/~25x/~1.3-1.5x figures this file used to carry for the fast
+   path's speedup at various points in its history are not reliable, and
+   in fact went the *wrong direction*: re-measured under `jax.jit` at the
+   point right after decision #8's analytic rewrite but before this
+   section's smoothing was reintroduced, the fast path was actually
+   **~13x faster** (not the ~4x the eager measurement had claimed).
+   **Properly measured now** (`jax.jit`, `n_tau=400`, `build_grid()`'s
+   own default): `thin_disk_response` (with default smoothing) costs
+   ~1.5ms per call, the templated fast path ~0.55ms -- **~2.8x faster**,
+   with the range ~2x-5x depending on `n_tau` (checked at 150/400/600).
+   Smoothing itself adds real cost when jitted (confirmed: not negligible
+   the way it looked eagerly), ~1.5x over `smoothing_days=0.0`. Both
+   `thin_disk_response` variants remain substantially more expensive than
+   `response_function` even fast and jitted -- ~12x for the templated
+   path, ~34x for the plain one, at the same settings -- confirming this
+   is an inherent cost of doing a real disk integral (any form) rather
+   than an assumed closed-form shape, not something either optimisation
+   removes; still a real, essentially-free win at call time over the
+   plain version, worth reaching for on long runs where every bit of
+   per-step cost compounds, but not a way to make `thin_disk_response`
+   competitive with the skew-normal's cost.
+
+   A banded/truncated smoothing kernel (only summing over the `~5 sigma`
+   nearest tau bins instead of the full dense `n_tau x n_tau` matrix) was
+   prototyped when investigating this and found genuinely faster under
+   `jax.jit` (~1.65x on the smoothing step alone) but with a real
+   edge-handling bug (clipping out-of-range neighbour indices to the
+   boundary over-weights the last few bins rather than properly excluding
+   them) that would need fixing before it's trustworthy -- not implemented,
+   given the smoothing step's absolute cost is already small once
+   properly jitted and this fit's overall per-step cost has other
+   components (Fourier transfer, per-band likelihoods) not profiled here
+   that may dominate regardless. Worth revisiting if profiling a real fit
+   shows the disk response specifically as the bottleneck.
 
    **Templates are built unsmoothed (`smoothing_days=0.0`
    internally), and smoothing is applied once, after stretching, at each
@@ -287,12 +322,47 @@ and package layout.
    smaller effect in practice than the smoothing-order bug above was, but
    the underlying asymmetry hasn't gone away, and is worth remembering if
    accuracy at extreme parameter combinations matters -- see
-   `docs/thin_disk_response.md` section 5 and
+   `docs/thin_disk_response.md` section 7 and
    `tests/test_thin_disk_response_fast.py`'s
    `test_fast_response_approximation_degrades_away_from_reference`. This
    is a real, documented tradeoff to make deliberately (build the table
    with a `reference_wavelength` close to the run's actual bands if the
    posterior is expected to favour high inclination), not a bug to chase.
+
+10. **`plot_corner`/`plot_corner_bands`/`plot_corner_free_lag`/
+    `plot_fourier_correlation` (`plotting.py`) were added directly in
+    response to looking at Starkey+2016's own diagnostic figures (Figure 6:
+    a `log_mdot`/inclination corner plot, 3 chains overlaid, crosshair at
+    the true value; Figure 4: individual-frequency power spectrum points,
+    not just a smoothed line -- the latter is why `plot_power_spectrum`'s
+    median line also got marker dots at each frequency).** `plot_corner`
+    is intentionally a small, hand-rolled matplotlib implementation, not
+    `arviz.plot_pair` (already a project dependency, used elsewhere for
+    `chains.nc`): `arviz.plot_pair` doesn't distinguish chains by colour in
+    scatter mode, and per-chain colouring is exactly the point here --
+    chains landing in visibly different places is the same thing a
+    Gelman-Rubin R-hat check would flag (see the `lag_mode="free"`
+    rough-edge below), made visible in a plot instead of a single number.
+    `S_band`/`C_band`/`tau_{band}` are individually-named scalar sites, so
+    `plot_corner_bands`/`plot_corner_free_lag` just auto-detect names from
+    `self.bands` and call the general `plot_corner`.
+
+    `S`/`C` (the driver's Fourier coefficients) are different in kind --
+    one vector-valued site each, from `numpyro.plate("freq", n_freq)`, not
+    `n_freq` individually-named scalars -- and `n_freq` is often in the
+    tens, where an `n_freq x n_freq` scatter-matrix corner plot would be
+    both unreadable and slow. `plot_fourier_correlation` shows the
+    posterior correlation matrix as a heatmap instead (chains pooled, not
+    coloured separately, since a correlation matrix is already a
+    per-sample summary): the same "is the posterior geometry sane"
+    question a corner plot would answer, `O(n_freq^2)` pixels instead of
+    `O(n_freq^2)` subplots, so it scales to any `n_freq` without changing
+    shape. All four are wired into `reporting.generate_report` --
+    `plot_corner_bands`/`plot_fourier_correlation` unconditionally,
+    `plot_corner`/`plot_corner_free_lag` only when the fit actually has
+    `log_mdot`/`inclination` or any `lag_mode="free"` band respectively
+    (checked via `ef.samples`/`ef.bands`, not assumed), so a report never
+    errors on a fit that doesn't have the relevant parameters.
 
 ## Known rough edges / things to check before trusting results on real data
 
