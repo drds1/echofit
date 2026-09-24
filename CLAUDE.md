@@ -44,7 +44,12 @@ and package layout.
 4. **Inclination affects skew only, not mean lag.** Mean lag comes from
    `lag_scaling(log_mdot, wavelength, M_BH)` alone. `response_function`'s
    skew-normal `alpha` parameter is a separate function of inclination. Keep
-   these decoupled if you touch `forward_model.response_function`.
+   these decoupled if you touch `forward_model.response_function`. This is
+   exact for `response_function` by construction. `thin_disk_response`
+   satisfies it exactly too, analytically -- *without* its default
+   smoothing (`smoothing_days=0.0`); with the default smoothing on (see
+   decision #8), it holds only approximately (~10% mean-lag drift face-on
+   to 80 degrees), a deliberate, documented trade-off, not an oversight.
 
 5. **Response function is swappable by contract, not inheritance.** Any
    replacement must accept `(tau_grid, log_mdot, wavelength, inclination,
@@ -111,86 +116,253 @@ and package layout.
    (`echofit.model.response_function = ...`) -- `echofit/responses.py` is
    only a small registry (`register_response`/`get_response`) for
    discoverability, it does not change how a response actually gets wired
-   into a fit. `thin_disk_response` is a JAX-differentiable, deterministic-
-   quadrature adaptation of the Monte-Carlo disk integrator (`tfbx` +
-   `tr4visc`/`tr4irad`) in the author's PhD-era CREAM Fortran code
-   (`pycecream`'s `cream_f90.f90`): real Shakura-Sunyaev viscous (+ optional
-   lamppost-irradiation) temperature profile, the disk's own light-travel-
-   time delay surface `tau(r, phi) = r(1 + sin(inclination) cos(phi))`, and
-   a Planck-derivative response weighting -- genuine physics, not an
-   assumed shape, unlike the default skew-normal. Two adaptation choices
-   worth knowing before touching it:
+   into a fit. `thin_disk_response` follows Starkey, Horne & Villforth
+   (2016, MNRAS 456, 1960; arXiv:1511.06162, the CREAM paper -- confirmed
+   directly against the paper's own equations, not just the Fortran): real
+   Shakura-Sunyaev viscous + lamppost-irradiation temperature profile
+   (their eq. 2), the disk's own light-travel-time delay surface
+   `tau(r, phi) = r(1 + cos(phi) sin(inclination))` (their eq. 5), and a
+   Planck-derivative response weighting -- genuine physics, not an assumed
+   shape, unlike the default skew-normal.
+
+   **It is now an exact analytic reduction to a 1-D integral over azimuth,
+   not a 2-D radius/azimuth quadrature (the original implementation, and
+   what the Fortran/Starkey+2016 both do numerically).** At fixed `phi`,
+   `tau(r, phi)` is linear in `r`, so the disk integral's delta function
+   collapses the radial integral exactly: `r*(phi, tau) = tau / (1 +
+   cos(phi) sin(inclination))`, giving `psi_raw(tau) = tau * integral
+   weight(r*(phi,tau)) / (1 + cos(phi) sin(inclination))**2 dphi`. No
+   radial grid, no domain cutoff -- `docs/thin_disk_response.md` section 4
+   has the full derivation. This was a direct response to two things: a
+   user report that high-inclination curves still looked wrong even after
+   the `r_max` cap fix below (turned out to be real residual radial-grid
+   artefacts, now gone entirely), and a direct request to derive an
+   analytic form for speed. Removing the radial dimension cut a real
+   `O(n_r * n_phi * n_tau)` compute cost down to `O(n_phi * n_tau)` --
+   an exact multiple wasn't re-verified under `jax.jit` before the old
+   grid version was deleted (see decision #9's "a methodology correction"
+   paragraph for why an eager-mode number here would be unreliable
+   regardless), `jax.grad` still non-zero w.r.t. `log_mdot` and
+   `inclination` (checked including at `inclination=89`, near the `sin=1`
+   edge). With smoothing off (`smoothing_days=0.0`, see below), the
+   mean-lag inclination-independence from decision #4 is exact to <1%
+   drift face-on to 80 degrees (was flat to only 4 significant figures,
+   with drift purely from quadrature error, before this rewrite) --
+   **with the default smoothing on, this loosens to ~10%, a deliberate
+   trade-off, not a regression** (see the smoothing paragraph below).
+
+   **Gaussian smoothing is back, but for a different reason and by a
+   different mechanism than before.** A second user report -- the
+   high-inclination curves still didn't look like Starkey+2016 Figure 3's
+   skewed-Gaussian-like shapes, showing an abrupt change in decay rate
+   (a "shoulder") near tau~1-2 days instead -- led to checking the Fortran
+   again, at the user's prompting, for a smoothing step. Confirmed present
+   in *both* response-function subroutines: `tfbx`'s `sig_gaus = dtau` and
+   the older `tfb`'s `sig_g = dtau/2`, each applied not as artefact
+   clean-up but as part of the physical model itself -- every individual
+   disk element's contribution is deposited as a Gaussian spread across
+   several tau bins (`tfbx` lines ~12604-12714), not a single delta-function
+   spike at its own exact delay. Because that smoothing is linear and
+   `sig_gaus` is one constant for the whole disk, smoothing each element's
+   contribution and summing is mathematically identical to computing the
+   exact unsmoothed integral once and convolving *that* with the same
+   Gaussian -- confirmed directly, and implemented as the latter (cheaper).
+   The Fortran's literal `sig_gaus = dtau` convention doesn't transplant
+   directly, though: it only smooths meaningfully because the Fortran's
+   typical output grids were coarse (`dtau` incidentally ~0.3-1 day); for a
+   finer `tau_grid` (confirmed with 800 points: `dtau` ~0.01 days) it's
+   negligible, and ties the disk's own physical smoothing to an unrelated
+   resolution choice regardless. `smoothing_frac` (default 0.4) instead
+   scales the width with `tau_ref` (from `lag_scaling`), chosen by directly
+   comparing rendered curves against Starkey+2016 Figure 3 -- see
+   `docs/thin_disk_response.md` section 4.
+
+   **This reintroduces a real, quantified trade-off, and it was resolved
+   with the user directly rather than picked unilaterally**: enough
+   smoothing to match the published shape (`smoothing_frac=0.4`) costs
+   ~10% mean-lag drift face-on to 80 degrees (0% unsmoothed, ~3% at 0.1,
+   ~6% at 0.2 -- monotonic in `smoothing_frac`). A reflecting-boundary
+   kernel (folding smoothed-away mass at `tau=0` back in, rather than
+   discarding it) was tried and does *not* fix this -- the drift is
+   inherent to any causally-respecting smoothing near a boundary that
+   high-inclination responses sit much closer to than face-on ones, not an
+   artefact of discarding vs redistributing leaked mass. Presented this
+   quantified trade-off to the user directly; they chose to keep
+   `smoothing_frac=0.4` as the default (matching the published look) over
+   a smaller value or defaulting to exact. `smoothing_days=0.0` remains
+   available for anyone who wants the decision-#4-exact behaviour back.
+   See `tests/test_thin_disk_response.py`'s
+   `test_thin_disk_response_smoothing_days_zero_gives_exact_mean_lag_independence`
+   and `test_thin_disk_response_default_smoothing_mean_lag_drift_is_bounded`.
+
+   The **irradiation term** (`include_irradiation=True`) was also corrected
+   while cross-checking against Starkey+2016 eq. 2: it's now the true
+   lamppost geometry `T_irr**4(r) ~ h_x / (r**2 + h_x**2)**1.5`
+   (`lamppost_height_rs`, default 3.0 Schwarzschild radii, matching the
+   paper's own illustrative value and the Fortran's `x_height=-3.0`), not
+   the `~1/r**3` far-field approximation used before -- the two only agree
+   for `r >> h_x`, and `h_x` is the same order of magnitude as `r_in`
+   (also 3 Schwarzschild radii, confirmed against both the paper's explicit
+   statement and the Fortran's actual default, `rinsch=1.0`, not the
+   commented-out `=3.0` that would give a different value), i.e. exactly
+   the regime this function spends the most time in. `include_irradiation`
+   still defaults to `False` (pure viscous), so this only affects opt-in
+   use.
+
+   Two adaptation choices still worth knowing:
    - It reuses `lag_scaling(log_mdot, wavelength, M_BH)` for its absolute
      lag scale (the "Wien radius"), rather than independently deriving an
      Eddington-ratio-to-Mdot conversion from scratch. This was deliberate:
      an independent derivation would give `log_mdot` a second, incompatible
      meaning depending which response a band used. Only the inner (ISCO)
-     radius uses real physical constants (G, c, M_sun) directly, since that
-     conversion doesn't need any extra accretion-rate calibration.
-   - Like `tophat_response_free`, it must stay a *smoothed* (Gaussian
-     kernel) deposit of disk-grid points onto `tau_grid`, never a hard
-     histogram/binning -- same zero-gradient trap as decision #7's "already
-     hit once", confirmed again here with `jax.grad` before considering the
-     function done (see `tests/test_thin_disk_response.py`).
-   - It costs `O(n_r * n_phi * n_tau)` per evaluation (a real
-     radius/azimuth integral) versus the skew-normal's closed form, so it's
-     an optional, heavier alternative -- not a default-swap candidate for
-     routine fits without checking the cost is acceptable.
-   - `n_r`/`n_phi` default to 50/64, not something smaller -- an earlier
-     40/24 default looked fine on the causality/normalisation/gradient
-     tests (none of which check smoothness) but produced a visibly jagged,
-     under-converged psi once actually plotted for `docs/thin_disk_response.md`
-     (each radius only contributing 24 distinct azimuth samples). Confirmed
-     by comparing 40x24/50x64/60x120 side by side: 50x64 is already
-     converged onto the same curve as 60x120. Don't drop below ~50x64
-     without re-checking a plotted psi, not just the numeric tests.
-   - `r_max` is capped at `r_max_factor * tau_ref` (default 20x), not left
-     as the uncapped `tau_grid[-1] / (1 - sin(inclination))` geometric
-     formula -- that formula alone made high-inclination curves ~66x-100x
-     wider in radial domain than a face-on one on the same `tau_grid` (at
-     80/89 degrees respectively), spreading the same log-spaced `n_r`
-     across a domain two orders of magnitude bigger and leaving it visibly
-     wavy right where the response has weight, even at the resolution that
-     already looked fine face-on. Found by actually plotting high-
-     inclination curves for `docs/thin_disk_response.md`, not by the unit
-     tests. The cap is safe (confirmed against an uncapped, far-higher-
-     resolution reference: max absolute difference ~2e-4) because the
-     Planck-derivative response weight decays exponentially in radius, so
-     nothing beyond ~20x `tau_ref` has any real weight to lose. If you
-     touch the radial grid again, re-run this comparison rather than
-     trusting the numeric tests alone -- they don't check smoothness.
+     radius and the lamppost height use real physical constants (G, c,
+     M_sun) directly, since that conversion needs no extra accretion-rate
+     calibration.
+   - The `r* < r_in` (inside the ISCO) mask is a smooth sigmoid, not a hard
+     `jnp.where` -- same zero-gradient trap as decision #7's "already hit
+     once", since `r*` depends on `inclination`, a sampled parameter.
+
+   The superseded (pre-analytic-rewrite) `n_r`/`r_max_factor` machinery,
+   and the debugging trail that led to it (a `40x24` default that passed
+   every numeric test but looked jagged once plotted; then an `r_max`
+   geometric-formula bug that made high-inclination curves ~66x-100x wider
+   in radial domain than face-on ones on the same grid), is preserved in
+   git history and `docs/thin_disk_response.md`'s section 4 as a record of
+   what was tried, not as current guidance -- neither exists in the
+   function any more. `smoothing_days` does still exist, but reintroduced
+   for a completely different reason (see above) -- don't assume it's the
+   same numerical-artefact-management parameter it used to be.
 
 9. **`build_thin_disk_response_table`/`build_thin_disk_response_fast`
-   trade `thin_disk_response`'s accuracy for MCMC-usable speed, the same
-   way the author's PhD-era CREAM Fortran code did.** `thin_disk_response`
-   costs `O(n_r * n_phi * n_tau)` per call, recomputed on every NUTS
-   leapfrog step if used directly -- these precompute a table of responses
-   across an inclination grid *once* (at one reference `log_mdot`/
-   `wavelength`), then get any other inclination via linear interpolation
-   and any other `log_mdot`/`wavelength` by *stretching* the lag axis
-   according to `lag_scaling`'s own scaling law (`s = lag_scaling(...) /
+   trade a little more accuracy for MCMC-usable speed, the same way the
+   author's PhD-era CREAM Fortran code did (confirmed directly in
+   `cream_f90.f90`: a `psistore(:,ist)` array precomputed once across an
+   inclination grid at one fixed reference `umdotref`/`wavref`, exactly
+   this mechanism).** These precompute a table of responses across an
+   inclination grid *once* (at one reference `log_mdot`/`wavelength`), then
+   get any other inclination via linear interpolation and any other
+   `log_mdot`/`wavelength` by *stretching* the lag axis according to
+   `lag_scaling`'s own scaling law (`s = lag_scaling(...) /
    tau_ref_reference`, evaluate the template at `tau_grid / s`, divide by
-   `s` to keep the area normalised). Confirmed ~90x faster per call at
-   matched resolution, with `jax.grad` still non-zero w.r.t. `log_mdot`
-   and `inclination` (checked on and off the precomputed inclination grid
-   points, same discipline as decision #7's gradient trap).
+   `s` to keep the area normalised). `jax.grad` still non-zero w.r.t.
+   `log_mdot` and `inclination` (checked on and off the precomputed
+   inclination grid points, same discipline as decision #7's gradient
+   trap).
 
-   The stretch is a genuine approximation, not an identity: the ISCO
+   **A methodology correction, worth flagging explicitly:** every speed
+   number in this file and `docs/thin_disk_response.md` up to this point
+   was measured with plain, eager (non-`jax.jit`) repeated Python calls --
+   which is *not* what happens inside a real NUTS fit, where NumPyro
+   `jax.jit`-compiles the whole log-density function once and every
+   leapfrog step reuses that compiled executable with none of the
+   per-call Python dispatch overhead eager timing includes. Checked
+   directly: at `n_tau=600`, an eager call to `thin_disk_response` took
+   ~134ms; the *same* call through `jax.jit` took ~2.6ms -- a ~50x gap
+   that has nothing to do with the function's real cost. This means the
+   ~90x/~4x/~25x/~1.3-1.5x figures this file used to carry for the fast
+   path's speedup at various points in its history are not reliable, and
+   in fact went the *wrong direction*: re-measured under `jax.jit` at the
+   point right after decision #8's analytic rewrite but before this
+   section's smoothing was reintroduced, the fast path was actually
+   **~13x faster** (not the ~4x the eager measurement had claimed).
+   **Properly measured now** (`jax.jit`, `n_tau=400`, `build_grid()`'s
+   own default): `thin_disk_response` (with default smoothing) costs
+   ~1.5ms per call, the templated fast path ~0.55ms -- **~2.8x faster**,
+   with the range ~2x-5x depending on `n_tau` (checked at 150/400/600).
+   Smoothing itself adds real cost when jitted (confirmed: not negligible
+   the way it looked eagerly), ~1.5x over `smoothing_days=0.0`. Both
+   `thin_disk_response` variants remain substantially more expensive than
+   `response_function` even fast and jitted -- ~12x for the templated
+   path, ~34x for the plain one, at the same settings -- confirming this
+   is an inherent cost of doing a real disk integral (any form) rather
+   than an assumed closed-form shape, not something either optimisation
+   removes; still a real, essentially-free win at call time over the
+   plain version, worth reaching for on long runs where every bit of
+   per-step cost compounds, but not a way to make `thin_disk_response`
+   competitive with the skew-normal's cost.
+
+   A banded/truncated smoothing kernel (only summing over the `~5 sigma`
+   nearest tau bins instead of the full dense `n_tau x n_tau` matrix) was
+   prototyped when investigating this and found genuinely faster under
+   `jax.jit` (~1.65x on the smoothing step alone) but with a real
+   edge-handling bug (clipping out-of-range neighbour indices to the
+   boundary over-weights the last few bins rather than properly excluding
+   them) that would need fixing before it's trustworthy -- not implemented,
+   given the smoothing step's absolute cost is already small once
+   properly jitted and this fit's overall per-step cost has other
+   components (Fourier transfer, per-band likelihoods) not profiled here
+   that may dominate regardless. Worth revisiting if profiling a real fit
+   shows the disk response specifically as the bottleneck.
+
+   **Templates are built unsmoothed (`smoothing_days=0.0`
+   internally), and smoothing is applied once, after stretching, at each
+   query's own `tau_ref` -- not baked into the table.** Smoothing the
+   templates *before* stretching them onto a different `log_mdot`/
+   `wavelength` would stretch the smoothing bandwidth right along with
+   everything else, silently coupling two things that should be
+   independent -- confirmed directly to matter a lot: doing it the wrong
+   way around made even the *near-reference-point* case (which should be
+   almost exact) off by ~13% at the peak; doing it the right way (as
+   implemented) brings that back under 1%, and the previously-hardest
+   tested case (`inclination=85`, `wavelength=7000`, table built with the
+   default `reference_wavelength=5000`) down to ~0.7% (was ~35%
+   pre-analytic-rewrite, ~4% immediately after it, before smoothing was
+   reintroduced). `thin_disk_response_from_table`/
+   `build_thin_disk_response_fast` both take their own
+   `smoothing_frac`/`smoothing_days`, independent of whatever
+   `build_thin_disk_response_table`'s `**table_kwargs` were.
+
+   The stretch is still a genuine approximation, not an identity: the ISCO
    (`r_in`) is a fixed absolute length that doesn't stretch along with
    everything else, so the ratio `r_in / tau_ref` -- and with it, how much
    the inner-boundary term shapes the response -- differs between the
    table's reference point and wherever a fit actually queries it. This
-   bites hardest exactly where the response is sharpest: high inclination,
-   far from the reference wavelength/`log_mdot`. Confirmed directly:
-   `inclination=85`, `wavelength=7000` (table built with the default
-   `reference_wavelength=5000`) is off by ~35% at the near-zero-lag spike's
-   *peak*, while the mean lag still tracks well and everywhere away from
-   the spike matches closely -- see `docs/thin_disk_response.md` section 5
-   and `tests/test_thin_disk_response_fast.py`'s
+   still bites hardest exactly where the response is sharpest: high
+   inclination, far from the reference wavelength/`log_mdot` -- now a much
+   smaller effect in practice than the smoothing-order bug above was, but
+   the underlying asymmetry hasn't gone away, and is worth remembering if
+   accuracy at extreme parameter combinations matters -- see
+   `docs/thin_disk_response.md` section 7 and
+   `tests/test_thin_disk_response_fast.py`'s
    `test_fast_response_approximation_degrades_away_from_reference`. This
    is a real, documented tradeoff to make deliberately (build the table
    with a `reference_wavelength` close to the run's actual bands if the
    posterior is expected to favour high inclination), not a bug to chase.
+
+10. **`plot_corner`/`plot_corner_bands`/`plot_corner_free_lag`/
+    `plot_fourier_correlation` (`plotting.py`) were added directly in
+    response to looking at Starkey+2016's own diagnostic figures (Figure 6:
+    a `log_mdot`/inclination corner plot, 3 chains overlaid, crosshair at
+    the true value; Figure 4: individual-frequency power spectrum points,
+    not just a smoothed line -- the latter is why `plot_power_spectrum`'s
+    median line also got marker dots at each frequency).** `plot_corner`
+    is intentionally a small, hand-rolled matplotlib implementation, not
+    `arviz.plot_pair` (already a project dependency, used elsewhere for
+    `chains.nc`): `arviz.plot_pair` doesn't distinguish chains by colour in
+    scatter mode, and per-chain colouring is exactly the point here --
+    chains landing in visibly different places is the same thing a
+    Gelman-Rubin R-hat check would flag (see the `lag_mode="free"`
+    rough-edge below), made visible in a plot instead of a single number.
+    `S_band`/`C_band`/`tau_{band}` are individually-named scalar sites, so
+    `plot_corner_bands`/`plot_corner_free_lag` just auto-detect names from
+    `self.bands` and call the general `plot_corner`.
+
+    `S`/`C` (the driver's Fourier coefficients) are different in kind --
+    one vector-valued site each, from `numpyro.plate("freq", n_freq)`, not
+    `n_freq` individually-named scalars -- and `n_freq` is often in the
+    tens, where an `n_freq x n_freq` scatter-matrix corner plot would be
+    both unreadable and slow. `plot_fourier_correlation` shows the
+    posterior correlation matrix as a heatmap instead (chains pooled, not
+    coloured separately, since a correlation matrix is already a
+    per-sample summary): the same "is the posterior geometry sane"
+    question a corner plot would answer, `O(n_freq^2)` pixels instead of
+    `O(n_freq^2)` subplots, so it scales to any `n_freq` without changing
+    shape. All four are wired into `reporting.generate_report` --
+    `plot_corner_bands`/`plot_fourier_correlation` unconditionally,
+    `plot_corner`/`plot_corner_free_lag` only when the fit actually has
+    `log_mdot`/`inclination` or any `lag_mode="free"` band respectively
+    (checked via `ef.samples`/`ef.bands`, not assumed), so a report never
+    errors on a fit that doesn't have the relevant parameters.
 
 ## Known rough edges / things to check before trusting results on real data
 

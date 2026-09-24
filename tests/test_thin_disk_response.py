@@ -83,6 +83,55 @@ def test_thin_disk_response_inclination_increases_skew_not_just_shifts_mean():
     assert skewness(psi_inclined) > skewness(psi_face_on)
 
 
+def test_thin_disk_response_smoothing_days_zero_gives_exact_mean_lag_independence():
+    """With smoothing off (smoothing_days=0.0), the analytic azimuthal
+    integral is exact, so decision #4's mean-lag-independent-of-inclination
+    claim should hold tightly, not just approximately -- this is the
+    "escape hatch" for anyone who wants that exactness back at the cost of
+    the visible kink the default smoothing exists to remove (see the next
+    test)."""
+    tau_grid = jnp.linspace(-1.0, 8.0, 800)
+    tau_np = np.asarray(tau_grid)
+
+    lags = []
+    for inclination in [0.0, 40.0, 80.0]:
+        psi = np.asarray(thin_disk_response(
+            tau_grid, log_mdot=0.0, wavelength=4000.0, inclination=inclination,
+            M_BH=1e8, smoothing_days=0.0,
+        ))
+        lags.append(_np_trapz(psi * tau_np, tau_np))
+
+    drift = abs(lags[-1] - lags[0]) / lags[0]
+    assert drift < 0.01, f"expected near-exact mean-lag independence with smoothing off, got {drift:.4f} drift"
+
+
+def test_thin_disk_response_default_smoothing_mean_lag_drift_is_bounded():
+    """The default smoothing_frac=0.4 (chosen to match Starkey+2016 Figure
+    3's shape, see docs/thin_disk_response.md section 4) trades some of
+    the smoothing_days=0.0 exactness above for a smoother curve: causal
+    smoothing near a boundary that a high-inclination response sits much
+    closer to than a face-on one inherently breaks perfect mean-lag
+    independence. This is a deliberate, discussed trade-off (not a bug),
+    but the drift should stay in the ballpark it was chosen at (~10%
+    face-on to 80 degrees) -- this catches an accidental regression to
+    something much larger, not a change in the trade-off itself."""
+    tau_grid = jnp.linspace(-1.0, 8.0, 800)
+    tau_np = np.asarray(tau_grid)
+
+    lags = []
+    for inclination in [0.0, 40.0, 80.0]:
+        psi = np.asarray(thin_disk_response(
+            tau_grid, log_mdot=0.0, wavelength=4000.0, inclination=inclination, M_BH=1e8,
+        ))
+        lags.append(_np_trapz(psi * tau_np, tau_np))
+
+    drift = abs(lags[-1] - lags[0]) / lags[0]
+    assert 0.03 < drift < 0.2, (
+        f"expected the default smoothing's mean-lag drift to stay near the ~10% it was "
+        f"chosen at (face-on to 80 degrees), got {drift:.4f} -- see docs/thin_disk_response.md"
+    )
+
+
 def test_registry_looks_up_built_ins():
     assert "thin_disk" in available_responses()
     assert "skew_normal" in available_responses()

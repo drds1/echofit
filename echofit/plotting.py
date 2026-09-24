@@ -2,14 +2,22 @@
 plotting.py
 ===========
 
-Three plotting entry points, matching the EchoFit API:
+Plotting entry points, matching the EchoFit API:
 
 * ``plot_raw_lightcurves``   -- one panel per band, ordered by wavelength.
 * ``plot_lightcurve_fits``   -- posterior predictive light curves (68%/95%
                                  credible bands) with the corresponding
                                  response function psi(tau) alongside each
                                  band.
+* ``plot_power_spectrum``    -- posterior driver power spectrum vs. the
+                                 fitted DRW prior.
 * ``plot_mcmc_diagnostics``  -- trace plots per (scalar) parameter.
+* ``plot_corner``            -- pairwise joint posteriors + marginals,
+                                 coloured per chain.
+* ``plot_fourier_correlation`` -- posterior correlation matrix of the
+                                 driver's Fourier coefficients (a corner
+                                 plot doesn't scale to n_freq often being
+                                 in the tens; a heatmap does).
 
 All functions take plain numpy-able arrays / dicts so they have no
 dependency on JAX or NumPyro themselves.
@@ -234,7 +242,10 @@ def plot_power_spectrum(
 
     ax.fill_between(freqs, plo95, phi95, color="0.6", alpha=0.15, label="posterior P(w) 95% CI")
     ax.fill_between(freqs, plo68, phi68, color="0.6", alpha=0.3, label="posterior P(w) 68% CI")
-    ax.plot(freqs, pmed, color="k", lw=1.5, label="posterior P(w) median")
+    ax.plot(
+        freqs, pmed, color="k", lw=1.0, marker="s", markersize=3,
+        label="posterior P(w) median (per frequency)",
+    )
 
     ax.fill_between(freqs, flo95, fhi95, color="C0", alpha=0.12)
     ax.plot(freqs, fmed, color="C0", lw=1.5, ls="--", label="fitted DRW prior (Lorentzian)")
@@ -298,4 +309,151 @@ def plot_mcmc_diagnostics(
     axes[-1].set_xlabel("sample")
     fig.suptitle("MCMC trace diagnostics")
     fig.tight_layout()
+    return fig, axes
+
+
+def plot_corner(
+    samples: Dict[str, np.ndarray],
+    param_names: Sequence[str] = ("log_mdot", "inclination"),
+    true_values: Optional[Dict[str, float]] = None,
+    figsize=None,
+):
+    """Corner plot (pairwise joint posteriors + 1-D marginals) coloured per
+    chain, in the style of Starkey, Horne & Villforth (2016, MNRAS 456,
+    1960; arXiv:1511.06162) Figure 6 -- overlaid chains distinguished by
+    colour rather than pooled into one, so this doubles as a convergence
+    check: independently-initialised chains that land in visibly different
+    places are exactly what a Gelman-Rubin R-hat check would also catch
+    (see CLAUDE.md's rough-edges note on `lag_mode="free"` recovery, which
+    needed exactly this kind of multi-chain scrutiny), but seeing *where*
+    they disagree is easier from a picture than from a single number.
+
+    Parameters
+    ----------
+    samples : dict
+        ``mcmc.get_samples(group_by_chain=True)`` output, i.e.
+        ``{name: array of shape (n_chains, n_samples)}`` (scalar sites
+        only -- pick vector sites like ``S``/``C`` apart first if you want
+        one of their components here).
+    param_names : sequence of str
+        Which parameters to plot, in order (also sets the grid size).
+        Defaults to ``("log_mdot", "inclination")``, the two parameters
+        shared across every physical-mode band and the ones Starkey+2016's
+        own Figure 6 uses -- only present if at least one band used
+        ``lag_mode="physical"`` (CLAUDE.md decision #7); raises a clear
+        ``KeyError`` (not a confusing plotting failure) if a requested name
+        isn't in ``samples``.
+    true_values : dict, optional
+        ``{param_name: value}`` to mark with crosshair lines across the
+        relevant panels (as in Starkey+2016 Figure 6) -- only meaningful
+        for synthetic data with a known answer; omit for real fits.
+    """
+    missing = [name for name in param_names if name not in samples]
+    if missing:
+        raise KeyError(
+            f"plot_corner: {missing} not found in samples -- available scalar "
+            f"sites: {sorted(samples.keys())}"
+        )
+
+    n = len(param_names)
+    if figsize is None:
+        figsize = (2.4 * n, 2.4 * n)
+    fig, axes = plt.subplots(n, n, figsize=figsize)
+    if n == 1:
+        axes = np.array([[axes]])
+
+    arrays = {name: np.asarray(samples[name]) for name in param_names}
+    n_chains = arrays[param_names[0]].shape[0]
+    colours = [f"C{c}" for c in range(n_chains)]
+
+    for i, name_i in enumerate(param_names):
+        for j, name_j in enumerate(param_names):
+            ax = axes[i, j]
+            if j > i:
+                ax.axis("off")
+                continue
+            if i == j:
+                for c in range(n_chains):
+                    ax.hist(
+                        arrays[name_i][c], bins=30, histtype="step",
+                        color=colours[c], density=True,
+                    )
+                if true_values and name_i in true_values:
+                    ax.axvline(true_values[name_i], color="k", lw=1)
+            else:
+                for c in range(n_chains):
+                    ax.scatter(
+                        arrays[name_j][c], arrays[name_i][c],
+                        s=4, alpha=0.3, color=colours[c], linewidths=0,
+                    )
+                if true_values and name_j in true_values:
+                    ax.axvline(true_values[name_j], color="k", lw=1)
+                if true_values and name_i in true_values:
+                    ax.axhline(true_values[name_i], color="k", lw=1)
+
+            if i == n - 1:
+                ax.set_xlabel(name_j, fontsize=9)
+            else:
+                ax.set_xticklabels([])
+            if j == 0 and i != 0:
+                ax.set_ylabel(name_i, fontsize=9)
+            elif j == 0 and i == 0:
+                ax.set_yticklabels([])
+            elif i != j:
+                ax.set_yticklabels([])
+
+    handles = [plt.Line2D([0], [0], color=colours[c], lw=2, label=f"chain {c}") for c in range(n_chains)]
+    fig.legend(handles=handles, loc="upper right", fontsize=8)
+    fig.suptitle("Posterior corner plot")
+    fig.tight_layout()
+    return fig, axes
+
+
+def plot_fourier_correlation(S_samples: np.ndarray, C_samples: np.ndarray, freqs: np.ndarray, figsize=(9, 4)):
+    """Posterior correlation matrix of the driver's Fourier coefficients,
+    ``S`` and ``C`` shown separately -- the scalable stand-in for a
+    ``plot_corner`` on ``S``/``C``, which are a single vector-valued site
+    each (from ``numpyro.plate("freq", n_freq)`` in ``model.py``, not
+    ``n_freq`` individually-named scalar sites) with ``n_freq`` often in
+    the tens, making an ``n_freq x n_freq`` scatter-matrix corner plot both
+    unreadable and slow to render.
+
+    A correlation heatmap answers the same underlying question a corner
+    plot would -- are these coefficients behaving as the (non-centred)
+    DRW prior assumes, roughly independent given ``sigma_drw``/``tau_drw``,
+    or is there a problematic posterior correlation between frequencies --
+    at a size that doesn't grow past one readable image regardless of
+    ``n_freq``. Chains are pooled here (unlike ``plot_corner``'s per-chain
+    colouring), since a correlation matrix is already a summary over
+    samples; check chain agreement via ``plot_corner`` or
+    ``plot_mcmc_diagnostics`` instead.
+
+    Parameters
+    ----------
+    S_samples, C_samples : array, shape (n_samples, n_freq) or (n_chains, n_samples, n_freq)
+        Posterior draws of the driver's sine/cosine Fourier coefficients
+        (``ef.samples["S"]``/``["C"]``, or the ``_samples_by_chain``
+        equivalent -- either is pooled into ``(n_total_samples, n_freq)``
+        before computing the correlation matrix).
+    freqs : (n_freq,) array
+        Driver angular frequency grid (rad/day), for axis labelling.
+    """
+    S = np.asarray(S_samples).reshape(-1, np.asarray(S_samples).shape[-1])
+    C = np.asarray(C_samples).reshape(-1, np.asarray(C_samples).shape[-1])
+
+    corr_S = np.corrcoef(S, rowvar=False)
+    corr_C = np.corrcoef(C, rowvar=False)
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    tick_idx = np.linspace(0, len(freqs) - 1, min(6, len(freqs))).astype(int)
+    for ax, corr, label in zip(axes, (corr_S, corr_C), ("S (sine)", "C (cosine)")):
+        im = ax.imshow(corr, vmin=-1, vmax=1, cmap="RdBu_r")
+        ax.set_xticks(tick_idx)
+        ax.set_xticklabels([f"{freqs[k]:.2g}" for k in tick_idx], rotation=90, fontsize=7)
+        ax.set_yticks(tick_idx)
+        ax.set_yticklabels([f"{freqs[k]:.2g}" for k in tick_idx], fontsize=7)
+        ax.set_xlabel(r"$\omega$ [rad/day]", fontsize=8)
+        ax.set_title(f"{label} correlation ({len(freqs)} frequencies)", fontsize=9)
+    fig.colorbar(im, ax=axes, shrink=0.8, label="posterior correlation")
+    fig.suptitle("Driver Fourier coefficient correlation")
     return fig, axes

@@ -1,0 +1,124 @@
+"""
+Tests for the diagnostic plots added alongside the disk-response work:
+plot_corner (and EchoFit's plot_corner_bands/plot_corner_free_lag
+convenience wrappers around it) and plot_fourier_correlation, plus
+reporting.generate_report's conditional inclusion of them (disk-parameter
+corner only for lag_mode="physical" fits, free-lag corner only for
+lag_mode="free" fits, band-offset corner and the Fourier correlation
+heatmap always).
+"""
+
+import warnings
+
+import numpy as np
+import pytest
+
+from echofit import plotting
+
+
+def test_plot_corner_shows_true_value_crosshair_and_raises_on_unknown_param():
+    rng = np.random.default_rng(0)
+    samples = {
+        "log_mdot": rng.normal(0.0, 0.1, size=(2, 100)),
+        "inclination": rng.normal(30.0, 3.0, size=(2, 100)),
+    }
+    fig, axes = plotting.plot_corner(samples, true_values={"log_mdot": 0.0, "inclination": 30.0})
+    assert axes.shape == (2, 2)
+
+    with pytest.raises(KeyError, match="not_a_param"):
+        plotting.plot_corner(samples, param_names=("log_mdot", "not_a_param"))
+
+
+def test_plot_corner_generalises_beyond_two_parameters():
+    rng = np.random.default_rng(0)
+    samples = {name: rng.normal(0.0, 1.0, size=(3, 50)) for name in ("a", "b", "c")}
+    fig, axes = plotting.plot_corner(samples, param_names=("a", "b", "c"))
+    assert axes.shape == (3, 3)
+
+
+def test_plot_fourier_correlation_handles_pooled_or_by_chain_shapes():
+    rng = np.random.default_rng(0)
+    n_freq = 12
+    freqs = np.geomspace(0.05, 3.0, n_freq)
+    S_pooled = rng.normal(0.0, 1.0, size=(200, n_freq))
+    C_by_chain = rng.normal(0.0, 1.0, size=(2, 100, n_freq))
+
+    fig, axes = plotting.plot_fourier_correlation(S_pooled, C_by_chain, freqs)
+    assert len(axes) == 2
+
+
+def _tiny_physical_fit():
+    from echofit.synthetic import generate_synthetic_dataset
+    from echofit.echofit import EchoFit
+
+    data = generate_synthetic_dataset(
+        M_BH=1.0e8, bands={"g": 4770.0, "i": 7625.0}, n_obs_per_band=15,
+        n_freq=6, n_tau=40, tau_max=30.0, noise_level=0.08, seed=0,
+    )
+    ef = EchoFit(M_BH=1.0e8)
+    for name, d in data["bands"].items():
+        ef.add_lightcurve(name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
+    ef.build_grid(n_freq=6, n_tau=40)
+    ef.fit(rng_seed=0, num_warmup=10, num_samples=10, progress_bar=False)
+    return ef, data
+
+
+def test_echofit_plot_corner_bands_covers_every_band():
+    ef, _ = _tiny_physical_fit()
+    fig, axes = ef.plot_corner_bands()
+    assert axes.shape == (4, 4)  # S_g, C_g, S_i, C_i
+
+
+def test_echofit_plot_corner_free_lag_raises_when_no_free_lag_bands():
+    ef, _ = _tiny_physical_fit()
+    with pytest.raises(ValueError, match="no lag_mode"):
+        ef.plot_corner_free_lag()
+
+
+def test_echofit_plot_fourier_correlation_runs():
+    ef, _ = _tiny_physical_fit()
+    fig, axes = ef.plot_fourier_correlation()
+    assert len(axes) == 2
+
+
+def test_report_includes_disk_and_band_corners_but_not_free_lag_for_physical_fit(tmp_path):
+    from echofit import reporting
+
+    ef, data = _tiny_physical_fit()
+    path = reporting.generate_report(ef, tmp_path, truth=data["truth"])
+    html = path.read_text()
+
+    assert "corner.png" in html
+    assert "corner_bands.png" in html
+    assert "fourier_correlation.png" in html
+    assert "corner_free_lag.png" not in html
+    for fname in ("corner.png", "corner_bands.png", "fourier_correlation.png"):
+        assert (tmp_path / fname).exists()
+    assert not (tmp_path / "corner_free_lag.png").exists()
+
+
+def test_report_includes_free_lag_corner_but_not_disk_corner_for_free_lag_only_fit(tmp_path):
+    from echofit.synthetic import generate_free_lag_dataset
+    from echofit.echofit import EchoFit
+    from echofit import reporting
+
+    data = generate_free_lag_dataset(
+        lines={"line_a": 8.0}, n_obs_per_line=15, n_obs_driver=20,
+        include_driver=True, n_freq=6, n_tau=40, tau_max=30.0, noise_level=0.08, seed=1,
+    )
+    ef = EchoFit(M_BH=None)
+    for name, d in data["bands"].items():
+        ef.add_lightcurve(name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"], lag_mode="free")
+    ef.add_driver_lightcurve(t=data["driver"]["t"], y=data["driver"]["y"], yerr=data["driver"]["yerr"])
+    ef.build_grid(n_freq=6, n_tau=40, tau_max=30.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ef.fit(rng_seed=0, num_warmup=10, num_samples=10, progress_bar=False)
+
+    path = reporting.generate_report(ef, tmp_path, truth=data["truth"])
+    html = path.read_text()
+
+    assert "corner.png" not in html
+    assert "corner_free_lag.png" in html
+    assert "corner_bands.png" in html
+    assert "fourier_correlation.png" in html

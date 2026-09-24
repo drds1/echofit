@@ -233,11 +233,10 @@ _WIEN_X_PEAK = 4.965114231744276            # solution of x = 5(1 - e^-x)
 _WIEN_B_ANGSTROM_KELVIN = _HC_OVER_K_ANGSTROM / _WIEN_X_PEAK
 
 
-def _isco_light_days(M_BH):
-    """Innermost stable circular orbit for a non-spinning black hole, in
-    light-days: r_ISCO = 6 GM / c^2 (i.e. 3 Schwarzschild radii)."""
+def _schwarzschild_radius_light_days(M_BH):
+    """One Schwarzschild radius, R_s = 2GM/c^2, in light-days."""
     r_g_m = _G * (M_BH * _M_SUN) / _C_LIGHT ** 2
-    return 6.0 * r_g_m / _LIGHT_DAY_M
+    return 2.0 * r_g_m / _LIGHT_DAY_M
 
 
 def thin_disk_response(
@@ -250,25 +249,32 @@ def thin_disk_response(
     include_irradiation: bool = False,
     irradiation_slope: float = 0.75,
     irradiation_weight: float = 0.5,
-    n_r: int = 50,
-    n_phi: int = 64,
-    r_max_factor: float = 20.0,
+    lamppost_height_rs: float = 3.0,
+    n_phi: int = 200,
+    smoothing_frac: float = 0.4,
     smoothing_days: float | None = None,
 ):
     """Causal, area-normalised transfer function from thin-disk reprocessing
-    theory, integrated over a genuine 2-D (radius, azimuth) disk grid.
+    theory -- an analytic reduction of the 2-D (radius, azimuth) disk
+    integral to a single 1-D integral over azimuth, exact for any tau_grid
+    point (no radial grid, no truncated domain).
 
-    Adapted (deterministic-quadrature, JAX-differentiable -- not a literal
-    line-by-line translation) from the Monte-Carlo disk integrator
-    ``tfbx``/``tr4visc``/``tr4irad`` in the author's PhD-era Fortran CREAM
-    code (``pycecream``'s ``cream_f90.f90``). Physics kept:
+    Physics follows Starkey, Horne & Villforth (2016, MNRAS 456, 1960;
+    arXiv:1511.06162, the CREAM paper), which in turn cites Cackett, Horne &
+    Winkler (2007) for the response function derivation, and the author's
+    PhD-era Fortran CREAM code (``pycecream``'s ``cream_f90.f90``,
+    ``tfbx``/``tr4visc``/``tr4irad``) for the original numerical (Monte
+    Carlo) implementation this replaces:
 
-    * Shakura-Sunyaev viscous temperature profile with an inner boundary
-      term, ``T_visc^4(r) ~ (1 - sqrt(r_in/r)) / r**3``.
-    * Optional lamppost irradiation temperature, ``T_irr^4(r) ~ 1/r**3``
-      (same radial power as viscous, in the flat-disk limit).
-    * The disk light-travel-time delay surface
-      ``tau(r, phi) = r * (1 + sin(inclination) * cos(phi))`` -- this is
+    * Shakura-Sunyaev viscous + lamppost-irradiation temperature profile
+      (Starkey+2016 eq. 2), ``T**4(r) = 3GM*Mdot/(8 pi sigma r**3) * (1 -
+      sqrt(r_in/r))  +  L_b*(1-a)*h_x / (4 pi sigma x**3)``, ``x = sqrt(r**2
+      + h_x**2)``, with ``r_in`` the innermost stable circular orbit
+      (3 Schwarzschild radii for a non-spinning black hole) and ``h_x`` the
+      lamppost height above the disk plane (3 Schwarzschild radii by
+      default, Starkey+2016's own illustrative value).
+    * The disk light-travel-time delay surface (Starkey+2016 eq. 5),
+      ``tau(r, phi) = r * (1 + cos(phi) * sin(inclination))`` -- this is
       what gives the response a genuine, inclination-driven skew and a hard
       causal edge at tau=0, rather than :func:`response_function`'s ad-hoc
       skew-normal shape.
@@ -278,15 +284,65 @@ def thin_disk_response(
       at temperature ``T(r)`` responds, in the observing band, to a small
       heating perturbation.
 
-    What is *not* replicated: the Fortran integrates by Monte Carlo
-    sampling of (r, phi) on every call and smooths the result onto the tau
-    grid with a Gaussian kernel -- not reproducible/differentiable in a
-    NUTS-friendly way. This uses a fixed deterministic (log-radius x
-    azimuth) quadrature grid instead, and deposits each grid point's
-    contribution onto ``tau_grid`` with that same Gaussian-kernel idea --
-    which also happens to be exactly what keeps this differentiable (a hard
-    histogram deposit has the same zero-gradient problem as a hard top-hat;
-    see :func:`tophat_response_free`'s docstring).
+    The analytic reduction: the full disk integral is
+    ``psi_raw(tau) = int_0^{2pi} int weight(r) delta(tau - tau(r,phi)) r dr dphi``.
+    At fixed ``phi``, ``tau(r, phi)`` is *linear* in ``r`` (unlike at fixed
+    ``r``, where it is two-valued in ``phi``), so the delta function has a
+    single root, ``r*(phi, tau) = tau / (1 + cos(phi) sin(inclination))``,
+    with Jacobian ``d(tau)/dr = 1 + cos(phi) sin(inclination)`` -- collapsing
+    the radial integral exactly (no truncation, no radial grid) and leaving
+
+    ``psi_raw(tau) = tau * int_0^{2pi} weight(r*(phi, tau)) / (1 + cos(phi)
+    sin(inclination))**2 dphi``,
+
+    a plain 1-D integral over a *fixed* ``phi`` grid for every ``tau_grid``
+    point, evaluated with a uniform-grid Riemann sum (``phi`` is periodic,
+    so this is spectrally accurate -- no ``trapz`` edge correction needed).
+    This replaces the earlier two-radial-grid, Gaussian-kernel-deposit
+    implementation entirely: that approach needed careful control of a
+    radial domain cutoff and a smoothing bandwidth to avoid visible
+    quadrature artefacts (worst exactly at high inclination, where the
+    naive radial domain a face-on response needs blows up by ~2-3 orders of
+    magnitude -- see git history / CLAUDE.md for that whole saga), none of
+    which this needs, since there is no radial grid to under-resolve.
+    Faster too: removing the radial dimension drops the cost from
+    ``O(n_r * n_phi * n_tau)`` to ``O(n_phi * n_tau)``, with a smaller
+    ``n_phi`` sufficient since it's now exact rather than an approximate
+    deposit (confirmed: this and the old grid-based version agree away from
+    the old version's known artefacts).
+
+    One thing this exact reduction does *not* remove: the Fortran's own
+    Gaussian smoothing, applied not as clean-up of a numerical artefact but
+    as part of the physical model itself -- each disk element's response is
+    deposited not as a single delta-function contribution at its own exact
+    delay, but spread with a Gaussian of width ``sig_gaus`` (``tfbx``, set
+    once, globally, to the output tau grid's own bin spacing, ``dtau``)
+    across several neighbouring tau bins (``tfbx`` lines ~12604-12714: the
+    nested radius/azimuth loop computes each grid point's ``taulag`` and
+    ``resp``, then spreads ``resp`` across ``iblo:ibhi`` with Gaussian
+    weights ``exp(-((taulag-taubin)/sig_gaus)**2 / 2)``). Confirmed present
+    in both of the Fortran's response-function subroutines (``tfbx``:
+    ``sig_gaus = dtau``; the older ``tfb``: ``sig_g = dtau/2``). Since
+    Gaussian smoothing is linear and ``sig_gaus`` is a single constant for
+    the whole disk (not varying grid point to grid point), smoothing each
+    element's contribution individually and then summing is mathematically
+    identical to computing the exact unsmoothed integral above and
+    convolving *that* once with the same Gaussian -- not an approximation
+    of the per-element version, just a cheaper way to compute the same
+    result. ``smoothing_frac``/``smoothing_days`` (below) does exactly
+    that, with a width chosen relative to the response's own characteristic
+    lag rather than the Fortran's literal (and, for a fine ``tau_grid``,
+    negligible) ``sig_gaus = dtau``. Passing ``smoothing_days=0.0`` (the
+    behaviour before this parameter was added back) leaves a real,
+    physically-meaningful feature unsmoothed: at high inclination the
+    near-side tangent line contributes a genuine grazing-incidence
+    enhancement right at tau=0 (confirmed a single, real local maximum
+    there, not a numerical spike), which then decays through a distinctly
+    faster initial rate than the disk's main-body contribution further out
+    -- not two separate humps with a dip between them (checked directly:
+    no interior local minimum), but an abrupt-enough change in decay rate
+    to look like a separate feature (a "shoulder") rather than the single,
+    smoothly-varying skewed peak the smoothed Starkey+2016 Figure 3 shows.
 
     Absolute normalisation: rather than independently deriving a physical
     Eddington-ratio-to-accretion-rate conversion (which would give
@@ -294,9 +350,9 @@ def thin_disk_response(
     function a band uses), the characteristic (Wien-law) radius is taken
     directly from :func:`lag_scaling` -- so switching a band between
     ``response_function`` and this function preserves what ``log_mdot``
-    means. Only the disk's *inner* edge (the ISCO) uses real physical
-    constants (G, c, M_sun), since that conversion needs no separate
-    accretion-rate calibration.
+    means. Only the disk's *inner* edge (the ISCO) and the lamppost height
+    use real physical constants (G, c, M_sun), since that conversion needs
+    no separate accretion-rate calibration.
 
     Parameters
     ----------
@@ -310,41 +366,60 @@ def thin_disk_response(
         matches the exponent implicit in ``lag_scaling``'s
         ``wavelength**(4/3)``). Fixed, not inferred.
     include_irradiation : bool
-        If True, mix in a separate lamppost-irradiation temperature
-        component (its own slope, weighted by ``irradiation_weight``)
-        instead of a single-temperature-component viscous disk.
+        If True, mix in the lamppost-irradiation temperature component
+        (``irradiation_slope``/``lamppost_height_rs``, weighted by
+        ``irradiation_weight``) instead of a single-component viscous disk.
     irradiation_slope : float
-        Only used if ``include_irradiation``.
+        Only used if ``include_irradiation``; the irradiation term's own
+        power-law index far from the lamppost (where ``T_irr**4 ~
+        1/r**(4*irradiation_slope)``, matching eq. 3's ``r >> h_x`` limit
+        at the standard 0.75).
     irradiation_weight : float
         Fraction of T**4 attributed to irradiation vs viscous heating at
-        the characteristic radius, if ``include_irradiation``.
-    n_r, n_phi : int
-        Radial / azimuthal quadrature resolution (fixed, not inferred).
-        Higher is more accurate and more expensive: this response is
-        integrated over ``n_r * n_phi`` points per evaluation, unlike
-        :func:`response_function`'s closed-form evaluation.
-    r_max_factor : float
-        Caps the radial integration domain at ``r_max_factor * tau_ref``
-        (``tau_ref`` from :func:`lag_scaling`), instead of extending all
-        the way to the geometrically-largest radius that could in
-        principle contribute at ``tau_grid[-1]`` (``tau_grid[-1] / (1 -
-        sin(inclination))``, which blows up at high inclination -- e.g.
-        ~1000x ``tau_ref`` at 80 degrees for a typical grid). The physical
-        response weight decays exponentially in radius (see the Planck
-        derivative below) and is negligible far below that geometric
-        extreme, so the cap loses essentially no real signal (confirmed
-        directly against an uncapped, far-higher-resolution reference: max
-        absolute difference ~2e-4) while keeping the log-spaced radial grid
-        concentrated where the response actually has weight. Without this,
-        the same ``n_r`` that resolves a face-on response smoothly leaves a
-        high-inclination one visibly jagged, since log-spacing over a
-        ~1000x larger domain is correspondingly ~1000x coarser near
-        ``tau_ref`` -- this was caught by actually plotting the response at
-        high inclination (see `docs/thin_disk_response.md`), not by the
-        unit tests, which don't check smoothness.
+        the characteristic radius, if ``include_irradiation``. A
+        phenomenological mixing knob (not derived from a physical
+        Eddington ratio/efficiency, for the same reason ``lag_scaling`` is
+        reused rather than an independent Mdot calibration above).
+    lamppost_height_rs : float
+        Lamppost height above the disk plane, in Schwarzschild radii. Only
+        affects the irradiation term's shape near ``r ~ h_x`` (it reduces
+        to a pure ``1/r**3``-like power law for ``r >> h_x``); the delay
+        surface itself does not depend on it, matching Starkey+2016 eq. 5.
+    n_phi : int
+        Azimuthal quadrature resolution (fixed, not inferred). Higher is
+        more accurate and more expensive; unlike the old radial-grid
+        implementation, this converges quickly since it's evaluating a
+        smooth periodic integrand exactly, not depositing samples onto a
+        histogram.
+    smoothing_frac : float
+        Sets the default Gaussian smoothing width (see ``smoothing_days``
+        below) as ``smoothing_frac * tau_ref`` (``tau_ref`` from
+        :func:`lag_scaling`), rather than the Fortran's literal ``sig_gaus
+        = dtau`` (tied to the output tau grid's own bin spacing). That
+        literal convention only smooths meaningfully when ``dtau`` happens
+        to be a decent fraction of a day, true in the Fortran's typical
+        (coarse) runs but not for a finer ``tau_grid`` (confirmed directly:
+        with an 800-point grid, ``dtau`` is ~0.01 days, giving negligible
+        smoothing) -- and ties the disk's own physical smoothing to an
+        unrelated resolution choice regardless. Scaling with ``tau_ref``
+        instead adapts automatically to whatever ``M_BH``/``log_mdot``/
+        ``wavelength`` a fit actually uses. ``0.4`` was chosen by comparing
+        rendered curves directly against Starkey+2016 Figure 3 (see
+        ``docs/thin_disk_response.md`` section 4) -- smaller values leave a
+        visible kink at high inclination where the near-side and main-body
+        contributions haven't fully merged; larger values start smoothing
+        away genuine inclination-driven skew differences between bands.
     smoothing_days : float, optional
-        Gaussian deposit bandwidth (days) used to bin disk-grid points onto
-        ``tau_grid``. Defaults to 1.5x the ``tau_grid`` spacing.
+        Overrides ``smoothing_frac * tau_ref`` with an explicit Gaussian
+        smoothing width (days), if you want the width fixed rather than
+        scaling with the response's own characteristic lag. This is what
+        actually gets applied: matching the Fortran's per-disk-element
+        ``sig_gaus`` (see above), computed here as a single, exactly
+        equivalent convolution of the whole curve rather than per grid
+        point. Pass ``0.0`` to disable smoothing entirely and get the raw
+        exact integral (useful for isolating the grazing-incidence feature
+        this smooths over, e.g. when comparing against this docstring's own
+        derivation).
 
     Returns
     -------
@@ -352,26 +427,28 @@ def thin_disk_response(
         Normalised response evaluated at ``tau_grid``, zero for tau < 0.
     """
     tau_ref = lag_scaling(log_mdot, wavelength, M_BH)
-    r_in = jnp.clip(_isco_light_days(M_BH), 1e-4, 0.4 * tau_ref)
-    r_max_geometric = tau_grid[-1] / jnp.clip(1.0 - jnp.sin(jnp.deg2rad(inclination)), 1e-2, None)
-    r_max = jnp.minimum(r_max_geometric, r_max_factor * tau_ref)
-    r_max = jnp.clip(r_max, 2.0 * tau_ref, None)
+    rs = _schwarzschild_radius_light_days(M_BH)
+    r_in = 3.0 * rs
+    hx = lamppost_height_rs * rs
 
-    # log-spaced radial quadrature grid; jnp.gradient gives each point's
-    # local spacing for the area-element weight (same pattern as
-    # model.drw_prior_scale's dw).
-    r = jnp.exp(jnp.linspace(jnp.log(r_in), jnp.log(r_max), n_r))
-    dr = jnp.gradient(r)
+    sininc = jnp.sin(jnp.deg2rad(jnp.clip(inclination, 0.0, 89.9)))
     phi = (jnp.arange(n_phi) + 0.5) * (2.0 * jnp.pi / n_phi)
     dphi = 2.0 * jnp.pi / n_phi
+    denom = jnp.clip(1.0 + sininc * jnp.cos(phi), 1e-3, None)  # (n_phi,)
+
+    tau_pos = jnp.clip(tau_grid, 0.0, None)
+    r_star = tau_pos[:, None] / denom[None, :]  # (n_tau, n_phi)
+    r_star_safe = jnp.clip(r_star, 1e-12, None)
 
     # T**4(r), shape-only (normalised to 1 at r = tau_ref, the Wien radius).
-    inner_term = (1.0 - jnp.sqrt(r_in / r)) / jnp.clip(
+    visc_inner_term = (1.0 - jnp.sqrt(r_in / r_star_safe)) / jnp.clip(
         1.0 - jnp.sqrt(r_in / tau_ref), 1e-6, None
     )
-    t4_visc = (tau_ref / r) ** (4.0 * viscous_slope) * inner_term
+    t4_visc = (tau_ref / r_star_safe) ** (4.0 * viscous_slope) * visc_inner_term
     if include_irradiation:
-        t4_irad = (tau_ref / r) ** (4.0 * irradiation_slope)
+        x_star = jnp.sqrt(r_star_safe ** 2 + hx ** 2)
+        x_ref = jnp.sqrt(tau_ref ** 2 + hx ** 2)
+        t4_irad = (hx / x_star ** 3) / (hx / x_ref ** 3)
         t4_shape = irradiation_weight * t4_irad + (1.0 - irradiation_weight) * t4_visc
     else:
         t4_shape = t4_visc
@@ -383,31 +460,44 @@ def thin_disk_response(
     T = t_ref_kelvin * jnp.clip(t4_shape, 1e-12, None) ** 0.25
     X = jnp.clip(_HC_OVER_K_ANGSTROM / (wavelength * T), None, 50.0)
     eX = jnp.exp(X)
-    planck_deriv = X ** 5 * eX / (eX - 1.0) ** 2  # (n_r,)
+    planck_deriv = X ** 5 * eX / (eX - 1.0) ** 2  # (n_tau, n_phi)
 
-    sininc = jnp.sin(jnp.deg2rad(inclination))
-    tau_rphi = r[:, None] * (1.0 + sininc * jnp.cos(phi)[None, :])       # (n_r, n_phi)
-    # the per-radius weight has no phi-dependence, so broadcast it across
-    # the azimuth axis explicitly rather than relying on a (n_r, 1) shape
-    # to survive the later .reshape(-1) as if it were (n_r, n_phi).
-    weight_rphi = jnp.broadcast_to((planck_deriv * r * dr)[:, None] * dphi, (n_r, n_phi))
+    # No disk material inside the ISCO -- a smooth (not hard) cutoff, since
+    # r_star depends on inclination, a sampled parameter, and a hard
+    # jnp.where here would have the same zero-gradient risk documented for
+    # tophat_response_free/CLAUDE.md decision #7.
+    mask = jax.nn.sigmoid((r_star - r_in) / jnp.clip(0.1 * r_in, 1e-6, None))
 
-    tau_flat = tau_rphi.reshape(-1)
-    weight_flat = weight_rphi.reshape(-1)
+    raw = tau_pos * jnp.sum(planck_deriv * mask / denom[None, :] ** 2, axis=1) * dphi
+    raw = jnp.where(tau_grid >= 0.0, raw, 0.0)
 
-    if smoothing_days is None:
-        sigma = 1.5 * jnp.mean(jnp.diff(tau_grid))
-    else:
-        sigma = smoothing_days
-
-    kernel = jnp.exp(-0.5 * ((tau_grid[:, None] - tau_flat[None, :]) / sigma) ** 2)
-    raw = kernel @ weight_flat
+    sigma = smoothing_frac * tau_ref if smoothing_days is None else smoothing_days
+    raw = jax.lax.cond(
+        sigma > 0.0,
+        lambda raw: _gaussian_smooth(raw, tau_grid, sigma),
+        lambda raw: raw,
+        raw,
+    )
+    # smoothing spreads weight across tau=0 from the tau>=0 side, so the
+    # causal mask has to be re-applied after it, not just before.
     raw = jnp.where(tau_grid >= 0.0, raw, 0.0)
 
     trapz = jnp.trapezoid if hasattr(jnp, "trapezoid") else jnp.trapz
     area = trapz(raw, tau_grid)
     psi = raw / jnp.clip(area, 1e-12, None)
     return psi
+
+
+def _gaussian_smooth(values, tau_grid, sigma):
+    """Convolve ``values`` (on ``tau_grid``) with a Gaussian of width
+    ``sigma``, mathematically equivalent to depositing each of many
+    individual point contributions with that same Gaussian spread and
+    summing (see :func:`thin_disk_response`'s docstring) -- linear in
+    ``values``, so it commutes with wherever those contributions actually
+    came from."""
+    kernel = jnp.exp(-0.5 * ((tau_grid[:, None] - tau_grid[None, :]) / sigma) ** 2)
+    kernel = kernel / jnp.clip(jnp.sum(kernel, axis=1, keepdims=True), 1e-12, None)
+    return kernel @ values
 
 
 class ThinDiskResponseTable(NamedTuple):
@@ -429,14 +519,13 @@ def build_thin_disk_response_table(
     reference_wavelength: float = 5000.0,
     u_max_factor: float = 15.0,
     n_u: int = 1200,
-    n_r: int = 400,
-    n_phi: int = 96,
+    n_phi: int = 400,
     **thin_disk_kwargs,
 ) -> ThinDiskResponseTable:
     """Precompute a lookup table of :func:`thin_disk_response` shapes across
     inclination, at high quadrature resolution, once -- so a fit can look
     the response up (:func:`thin_disk_response_from_table`) instead of
-    re-running the full O(n_r * n_phi * n_tau) disk integral on every NUTS
+    re-running the full O(n_phi * n_tau) disk integral on every NUTS
     step.
 
     This is a JAX-differentiable version of the precompute-and-interpolate
@@ -476,9 +565,9 @@ def build_thin_disk_response_table(
         which is safe but silently loses accuracy in the tail if too small.
     n_u : int
         Resolution of the template's own lag axis.
-    n_r, n_phi : int
-        Passed through to :func:`thin_disk_response` for the (one-off,
-        so affordably high-resolution) template computation.
+    n_phi : int
+        Passed through to :func:`thin_disk_response` for the (one-off, so
+        affordably high-resolution) template computation.
     **thin_disk_kwargs
         Any other :func:`thin_disk_response` keyword (``viscous_slope``,
         ``include_irradiation``, ...), applied identically to every
@@ -492,10 +581,20 @@ def build_thin_disk_response_table(
     tau_ref_reference = float(lag_scaling(reference_log_mdot, reference_wavelength, M_BH))
     u_grid = jnp.linspace(-0.05 * tau_ref_reference, u_max_factor * tau_ref_reference, n_u)
 
+    # Templates are built *unsmoothed* (smoothing_days=0.0), even though
+    # thin_disk_response smooths by default -- smoothing has to happen
+    # *after* stretching a template onto a query's own tau_ref, using that
+    # query's own smoothing width, or the reference point's smoothing
+    # bandwidth gets stretched along with everything else and the
+    # approximation gets substantially worse (confirmed directly: this
+    # dropped the near-reference case from ~13% peak error back to <1%).
+    # thin_disk_response_from_table applies the equivalent smoothing once,
+    # after stretching.
+    thin_disk_kwargs.setdefault("smoothing_days", 0.0)
     templates = jnp.stack([
         thin_disk_response(
             u_grid, reference_log_mdot, reference_wavelength, float(incl), M_BH,
-            n_r=n_r, n_phi=n_phi, **thin_disk_kwargs,
+            n_phi=n_phi, **thin_disk_kwargs,
         )
         for incl in incl_grid
     ])
@@ -506,7 +605,10 @@ def build_thin_disk_response_table(
     )
 
 
-def thin_disk_response_from_table(table: ThinDiskResponseTable, tau_grid, log_mdot, wavelength, inclination):
+def thin_disk_response_from_table(
+    table: ThinDiskResponseTable, tau_grid, log_mdot, wavelength, inclination,
+    smoothing_frac: float = 0.4, smoothing_days: float | None = None,
+):
     """Fast, interpolated stand-in for :func:`thin_disk_response`, using a
     precomputed :class:`ThinDiskResponseTable` (see
     :func:`build_thin_disk_response_table`) instead of recomputing the disk
@@ -524,13 +626,24 @@ def thin_disk_response_from_table(table: ThinDiskResponseTable, tau_grid, log_md
        :func:`build_thin_disk_response_table`'s docstring.
 
     Both steps are ``jnp.interp`` against a fixed table, so this is `O(n_u +
-    n_tau)` per call rather than :func:`thin_disk_response`'s `O(n_r * n_phi
-    * n_tau)` disk integral -- the whole point for use inside NUTS. Queries
+    n_tau)` per call rather than :func:`thin_disk_response`'s `O(n_phi *
+    n_tau)` disk integral -- the whole point for use inside NUTS. Queries
     landing outside the table's ``u_grid`` (an accretion rate/wavelength
     combination far from what the table was built for) return 0 rather than
     extrapolating, which is safe but a sign the table needs a larger
     ``u_max_factor`` or a reference point closer to where the fit actually
     lives.
+
+    Gaussian smoothing (``smoothing_frac``/``smoothing_days``, same
+    meaning and default as :func:`thin_disk_response`'s) is applied *after*
+    stretching, at this query's own ``tau_ref`` -- not baked into the
+    table's templates (which :func:`build_thin_disk_response_table` builds
+    unsmoothed). Smoothing at the reference point and then stretching that
+    already-smoothed shape would stretch the smoothing bandwidth along
+    with everything else, which is a substantially worse approximation
+    (confirmed directly: this dropped the near-reference-point case from
+    ~13% peak error back to <1%, matching how close the two functions are
+    without smoothing at all).
     """
     tau_ref = lag_scaling(log_mdot, wavelength, table.M_BH)
     stretch = jnp.clip(tau_ref / table.tau_ref_reference, 1e-6, None)
@@ -541,12 +654,23 @@ def thin_disk_response_from_table(table: ThinDiskResponseTable, tau_grid, log_md
     raw = jnp.interp(u_query, table.u_grid, psi_u, left=0.0, right=0.0) / stretch
     raw = jnp.where(tau_grid >= 0.0, raw, 0.0)
 
+    sigma = smoothing_frac * tau_ref if smoothing_days is None else smoothing_days
+    raw = jax.lax.cond(
+        sigma > 0.0,
+        lambda raw: _gaussian_smooth(raw, tau_grid, sigma),
+        lambda raw: raw,
+        raw,
+    )
+    raw = jnp.where(tau_grid >= 0.0, raw, 0.0)
+
     trapz = jnp.trapezoid if hasattr(jnp, "trapezoid") else jnp.trapz
     area = trapz(raw, tau_grid)
     return raw / jnp.clip(area, 1e-12, None)
 
 
-def build_thin_disk_response_fast(M_BH, **table_kwargs) -> Callable:
+def build_thin_disk_response_fast(
+    M_BH, smoothing_frac: float = 0.4, smoothing_days: float | None = None, **table_kwargs,
+) -> Callable:
     """Build and return a ready-to-use, interpolation-based response
     function matching the standard ``(tau_grid, log_mdot, wavelength,
     inclination, M_BH, ...)`` contract (CLAUDE.md decision #5) -- the
@@ -558,13 +682,24 @@ def build_thin_disk_response_fast(M_BH, **table_kwargs) -> Callable:
 
         model.response_function = build_thin_disk_response_fast(M_BH=1e8)
 
+    ``smoothing_frac``/``smoothing_days`` (same meaning as
+    :func:`thin_disk_response`'s) control the query-time smoothing applied
+    by :func:`thin_disk_response_from_table` -- kept separate from
+    ``**table_kwargs`` (passed to :func:`build_thin_disk_response_table`
+    for the one-off template build, which always builds unsmoothed
+    templates regardless, per that function's own docstring) so smoothing
+    is applied once, correctly, at each query's own scale.
+
     The underlying table (useful for inspecting/plotting what got
     precomputed) is attached as ``.table`` on the returned function.
     """
     table = build_thin_disk_response_table(M_BH, **table_kwargs)
 
     def _response(tau_grid, log_mdot, wavelength, inclination, M_BH=None, **kwargs):
-        return thin_disk_response_from_table(table, tau_grid, log_mdot, wavelength, inclination)
+        return thin_disk_response_from_table(
+            table, tau_grid, log_mdot, wavelength, inclination,
+            smoothing_frac=smoothing_frac, smoothing_days=smoothing_days,
+        )
 
     _response.table = table
     return _response

@@ -116,7 +116,7 @@ echofit/
                           latter supports checkpointing/resuming)
     echofit.py           EchoFit: main user-facing class
     plotting.py          plot_raw_lightcurves, plot_lightcurve_fits, plot_power_spectrum,
-                          plot_mcmc_diagnostics
+                          plot_mcmc_diagnostics, plot_corner, plot_fourier_correlation
     reporting.py          generate_report: shared plots + report.html generation,
                           used by both EchoFit(title=...) and scripts/smoke_test.py
     run_manager.py        on-disk run layout, output-dir resolution, checkpoint
@@ -259,7 +259,23 @@ ef.plot_raw_lightcurves()
 ef.plot_lightcurve_fits()
 ef.plot_power_spectrum()
 ef.plot_mcmc_diagnostics()
+ef.plot_corner()              # log_mdot / inclination, coloured per chain
+ef.plot_corner_bands()        # S_band / C_band (offset/stretch) for every band
+ef.plot_corner_free_lag()     # tau_band, only if any band used lag_mode="free"
+ef.plot_fourier_correlation() # driver Fourier coefficient correlation heatmap
 ```
+
+`plot_corner`/`plot_corner_bands`/`plot_corner_free_lag` are pairwise
+posterior corner plots (joint scatter + 1-D marginals), coloured per chain
+and, for synthetic data, overlaid with the true value -- in the style of
+Starkey, Horne & Villforth (2016) Figure 6. `plot_fourier_correlation` is
+the scalable stand-in for a corner plot on the driver's Fourier
+coefficients (`S`/`C`), which are one vector-valued site each rather than
+individually-named scalars and often number in the tens -- a correlation
+heatmap answers the same "is the posterior geometry sane" question a
+corner plot would, without needing `n_freq` scatter panels. All four are
+included automatically in `report.html` (see below), the disk-parameter
+and free-lag ones only when the fit actually has those parameters.
 
 See `notebooks/demo.ipynb` for the full walkthrough.
 
@@ -349,17 +365,24 @@ on `tau_grid`. Two are built in:
 
 * `response_function` (the default): an ad-hoc but cheap skew-normal shape,
   fast to evaluate every NUTS step.
-* `thin_disk_response`: a physically-motivated accretion-disk response,
-  ported (as a deterministic, JAX-differentiable quadrature, not a literal
-  translation) from the author's PhD-era CREAM Fortran code
+* `thin_disk_response`: a physically-motivated accretion-disk response
+  following Starkey, Horne & Villforth (2016, MNRAS 456, 1960;
+  [arXiv:1511.06162](https://arxiv.org/abs/1511.06162), the CREAM paper),
+  cross-checked directly against that paper's equations and against the
+  author's PhD-era CREAM Fortran code
   ([`pycecream`](https://github.com/drds1/pycecream)`/cream_f90.f90`'s
-  `tfbx`/`tr4visc`/`tr4irad`). It integrates a genuine Shakura-Sunyaev
-  viscous (+ optional lamppost-irradiation) temperature profile over the
-  disk's light-travel-time delay surface, weighted by the Planck-function
+  `tfbx`/`tr4visc`/`tr4irad`). It combines a genuine Shakura-Sunyaev
+  viscous + lamppost-irradiation temperature profile with the disk's own
+  light-travel-time delay surface, weighted by the Planck-function
   temperature derivative -- giving inclination-driven skew and a hard
-  causal edge from the geometry itself, rather than an assumed shape. It's
-  slower per evaluation (integrated over a radius/azimuth grid, not
-  closed-form) and exposed via `echofit.responses` for discoverability:
+  causal edge from the geometry itself, rather than an assumed shape.
+  Unlike the closed-form skew-normal, this is a genuine disk integral, but
+  an **exact analytic one**: the two radius/azimuth integral reduces, via a
+  delta-function argument, to a single 1-D integral over azimuth (no
+  radial grid, no truncation). A single Gaussian smoothing convolution is
+  then applied on top (matching a genuine, physically-motivated part of
+  the original Fortran, not just numerical clean-up -- see the docs below
+  for why), exposed via `echofit.responses` for discoverability:
 
   ```python
   import echofit.model as model
@@ -370,20 +393,24 @@ on `tau_grid`. Two are built in:
 
   See [`docs/thin_disk_response.md`](docs/thin_disk_response.md) for
   exactly how this is computed (temperature profile, delay surface,
-  response weighting, and why it's a deterministic quadrature rather than
-  the Fortran's Monte Carlo), plus charts verifying that inclination
-  reshapes the response without moving its mean lag, and that the mean lag
-  scales with accretion rate the way thin-disk theory predicts.
+  response weighting, the analytic azimuthal-integral derivation, and the
+  smoothing step and the mean-lag-vs-inclination trade-off it brings),
+  plus charts verifying that the mean lag scales with accretion rate the
+  way thin-disk theory predicts.
 
-  Because that disk integral is much more expensive than the closed-form
-  skew-normal and NUTS calls a band's response function on every leapfrog
-  step, there's also a fast path, `build_thin_disk_response_fast`: it
-  precomputes `thin_disk_response` once across a grid of inclinations, then
-  gets any other inclination via interpolation and any other accretion
-  rate/wavelength by *stretching* the lag axis according to
-  `lag_scaling`'s own `mdot**(1/3)`/`wavelength**(4/3)` law, the same
+  There's also a fast path, `build_thin_disk_response_fast`, for the
+  common case of NUTS calling a band's response function on every leapfrog
+  step: it precomputes `thin_disk_response` once across a grid of
+  inclinations, then gets any other inclination via interpolation and any
+  other accretion rate/wavelength by *stretching* the lag axis according
+  to `lag_scaling`'s own `mdot**(1/3)`/`wavelength**(4/3)` law, the same
   precompute-and-stretch trick used in the author's PhD-era CREAM code --
-  confirmed ~90x faster per call at matched resolution:
+  confirmed (properly, via `jax.jit`, matching how NUTS actually calls it --
+  see `docs/thin_disk_response.md` section 7 for why that distinction
+  matters) roughly 2-5x faster per call depending on grid size, though
+  both `thin_disk_response` variants remain tens of times more expensive
+  than the closed-form skew-normal even so, an inherent cost of a real
+  disk integral rather than something either optimisation removes:
 
   ```python
   from echofit.forward_model import build_thin_disk_response_fast
@@ -394,7 +421,7 @@ on `tau_grid`. Two are built in:
   The stretch is an approximation (the disk's inner edge is a fixed
   absolute radius, so it doesn't stretch too), worst at high inclination
   far from the table's reference accretion rate/wavelength -- see
-  `docs/thin_disk_response.md` section 5 for exactly how much that costs
+  `docs/thin_disk_response.md` section 7 for exactly how much that costs
   in accuracy and when to use the exact `thin_disk_response` instead.
 
 `echofit.responses.register_response(name, fn)` registers your own
