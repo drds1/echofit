@@ -4,6 +4,23 @@ Bayesian modelling of AGN reverberation-mapping light curves as a delayed,
 smoothed echo of an unobserved driving (lamppost) X-ray light curve, built on
 [JAX](https://github.com/google/jax) + [NumPyro](https://num.pyro.ai/).
 
+## Contents
+
+- [Background](#background)
+- [Model](#model)
+- [Package layout](#package-layout)
+- [Install](#install)
+  - [1. Check you have Python 3.10 or newer](#1-check-you-have-python-310-or-newer)
+  - [2. Install Poetry](#2-install-poetry)
+  - [3. Get the code and install its dependencies](#3-get-the-code-and-install-its-dependencies)
+  - [4. Run things with `poetry run`](#4-run-things-with-poetry-run)
+- [Quickstart](#quickstart)
+- [Fitting your own light curves, with saved/resumable runs](#fitting-your-own-light-curves-with-savedresumable-runs)
+- [Visual smoke test](#visual-smoke-test)
+- [Swapping the response function](#swapping-the-response-function)
+- [Emission-line / free-lag mode and driver light curves](#emission-line--free-lag-mode-and-driver-light-curves)
+- [Status / caveats](#status--caveats)
+
 ## Background
 
 Active galactic nuclei (AGN) are powered by gas accreting onto a
