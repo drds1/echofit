@@ -37,21 +37,6 @@ OUT_DIR = "docs/images"
 M_BH = 1.0e8       # solar masses
 WAVELENGTH = 5000.0  # Angstrom
 
-# thin_disk_response's own fitting defaults (n_r=50, n_phi=64) are already
-# a step up from an initial 40x24 default that looked fine on the unit
-# tests but was visibly under-converged once plotted (see CLAUDE.md design
-# decision #8) -- for these illustration figures, quality matters more
-# than per-evaluation speed, so use a higher resolution still, especially
-# for n_r: at inclination=0 the delay surface has *no* azimuthal dependence
-# (tau(r, phi) = r for every phi), so n_phi cannot smooth a face-on curve
-# at all, only n_r can; and the radial grid is log-spaced, so at high mdot
-# (where the response sits at large r, out where log-spacing is coarsest
-# in absolute terms) it takes a substantially larger n_r to resolve the
-# response as smoothly as at low mdot -- confirmed by comparing n_r in
-# {150, 400, 800} at log_mdot=1.0: 400 already matches 800.
-PLOT_N_R = 400
-PLOT_N_PHI = 96
-
 
 def _mean_lag(tau_grid, psi):
     """Numerically integrated mean lag of a response, int psi*tau dtau."""
@@ -74,7 +59,6 @@ def plot_inclination_sweep():
         psi = thin_disk_response(
             tau_grid, log_mdot=0.0, wavelength=WAVELENGTH,
             inclination=inclination, M_BH=M_BH,
-            n_r=PLOT_N_R, n_phi=PLOT_N_PHI,
         )
         mean_lag = _mean_lag(tau_grid, psi)
         ax.plot(tau_grid, psi, color=colour, label=f"inclination={inclination:.0f} deg")
@@ -107,7 +91,6 @@ def plot_mdot_sweep():
         psi = thin_disk_response(
             tau_grid, log_mdot=log_mdot, wavelength=WAVELENGTH,
             inclination=0.0, M_BH=M_BH,
-            n_r=PLOT_N_R, n_phi=PLOT_N_PHI,
         )
         mean_lag = _mean_lag(tau_grid, psi)
         mdot = 10.0 ** log_mdot
@@ -133,12 +116,7 @@ def plot_fast_vs_slow():
     table's own reference point (where the stretch is small), and a
     deliberately harder case far from it (high inclination -- the response's
     sharpest feature -- at a different wavelength) to show honestly where
-    the self-similar-stretching approximation starts to strain. The hard
-    case needs its own zoomed inset: at full width the two curves look
-    almost identical (both integrate to the same area and agree well
-    everywhere except right at the sharp near-zero-lag spike), which would
-    be a misleading picture on its own -- zooming into just that spike is
-    what actually shows the ~35% peak-height mismatch this case has."""
+    the self-similar-stretching approximation starts to strain."""
     fast = build_thin_disk_response_fast(M_BH)
     tau_grid = np.linspace(-2.0, 15.0, 600)
     cases = [
@@ -152,7 +130,7 @@ def plot_fast_vs_slow():
     for ax, case in zip(axes, cases):
         psi_slow = np.asarray(thin_disk_response(
             tau_grid, log_mdot=case["log_mdot"], wavelength=case["wavelength"],
-            inclination=case["inclination"], M_BH=M_BH, n_r=PLOT_N_R, n_phi=PLOT_N_PHI,
+            inclination=case["inclination"], M_BH=M_BH,
         ))
         psi_fast = np.asarray(fast(tau_grid, case["log_mdot"], case["wavelength"], case["inclination"], M_BH))
         ax.plot(tau_grid, psi_slow, label="exact (thin_disk_response)")

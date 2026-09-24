@@ -2,22 +2,25 @@
 
 `forward_model.thin_disk_response` is a physically-motivated alternative to
 the default skew-normal `response_function` (see the README's "Swapping the
-response function" section and `CLAUDE.md`'s design decisions #5 and #8).
-This document works through exactly how it is computed, step by step,
+response function" section and `CLAUDE.md`'s design decisions #5, #8 and
+#9). This document works through exactly how it is computed, step by step,
 shows the two scaling checks worth seeing on a chart rather than taking on
-faith (that inclination reshapes the response without moving its mean
-lag, and that the mean lag grows with accretion rate the way thin-disk
-theory says it should), and covers the precomputed-template fast path
-(`build_thin_disk_response_fast`, section 5) that makes it practical to
-use inside NUTS at all.
+faith (that inclination reshapes the response without moving its mean lag,
+and that the mean lag grows with accretion rate the way thin-disk theory
+says it should), and covers the precomputed-template fast path
+(`build_thin_disk_response_fast`, section 5).
 
-It is a deterministic, JAX-differentiable adaptation of the Monte-Carlo
-disk integrator (the `tfbx`, `tr4visc` and `tr4irad` subroutines) in the
-author's PhD-era CREAM Fortran code
-([`pycecream`](https://github.com/drds1/pycecream)'s `cream_f90.f90`), not a
-line-by-line translation -- the differences from the original Fortran are
-called out explicitly below, each one because Monte Carlo sampling and hard
-binning are not compatible with a NUTS sampler that needs gradients.
+The physics follows Starkey, Horne & Villforth (2016, MNRAS 456, 1960;
+[arXiv:1511.06162](https://arxiv.org/abs/1511.06162), the CREAM paper),
+which in turn cites Cackett, Horne & Winkler (2007) for the response
+function derivation, and the author's PhD-era Fortran CREAM code
+(`pycecream`'s `cream_f90.f90`, the `tfbx`/`tr4visc`/`tr4irad` subroutines)
+for the original numerical (Monte Carlo) implementation. This is not a
+line-by-line translation of either: the Fortran evaluates the response by
+random sampling and Gaussian smoothing (not reproducible/differentiable in
+a NUTS-friendly way), and Starkey+2016 itself evaluates it numerically too
+-- section 4 below works through an exact **analytic** reduction instead,
+found while implementing this, that removes the need for any of that.
 
 ## 1. The physical picture
 
@@ -35,32 +38,56 @@ physics.
 ## 2. Temperature profile
 
 Two heating mechanisms are combined, each raised to the 4th power of
-temperature (as radiative flux balance requires) and summed:
-
-**Viscous heating** (Shakura-Sunyaev, standard thin-disk theory), with an
-inner boundary term that drives the temperature smoothly to zero at the
-inner edge `r_in`:
+temperature (as radiative flux balance requires) and summed -- this is
+Starkey+2016 eq. 2 exactly:
 
 ```
-T_visc^4(r) = K_visc * (1 - sqrt(r_in / r)) / r**3
+T**4(r) = 3GM*Mdot/(8 pi sigma r**3) * (1 - sqrt(r_in/r))     [viscous]
+          + L_b*(1-a)*h_x / (4 pi sigma x**3)                  [irradiation]
 ```
 
-**Lamppost irradiation** (optional, `include_irradiation=True`), the
-disk reprocessing a point-source continuum above the disk plane:
+with `x = sqrt(r**2 + h_x**2)` the distance from the lamppost (at height
+`h_x` above the disk plane) to the surface element, `L_b = eta*Mdot*c**2`
+the lamppost's bolometric luminosity, `a` the disk albedo, and `r_in` the
+innermost stable circular orbit, **3 Schwarzschild radii for a
+non-spinning black hole** -- confirmed against both the published paper's
+own statement of this ("`rin` is the innermost stable circular orbit
+(3 rs for a Schwarzschild black hole)") and the Fortran's own default
+(`rinld = 3*f_rs2ld(rinsch, embh)` with the active default `urin = 1.0`,
+i.e. `rinsch=1` giving exactly 3 Schwarzschild radii too -- there's a
+separate, *commented-out* `urin = 3.0` line in the Fortran that would give
+9 Rs instead, but it isn't the one actually used).
+
+**Viscous heating**, with an inner boundary term that drives the
+temperature smoothly to zero at `r_in`:
 
 ```
-T_irr^4(r) = K_irr / r**3
+T_visc**4(r) = K_visc * (1 - sqrt(r_in / r)) / r**3
 ```
 
-(the same radial power as the viscous term, in the flat-disk limit used
-here). The two are combined as `T^4(r) = w * T_irr^4(r) + (1-w) *
-T_visc^4(r)` for a mixing weight `w` (`irradiation_weight`), or just the
-viscous term alone by default.
+**Lamppost irradiation** (optional, `include_irradiation=True`): the *true*
+lamppost geometry above, not the `~1/r**3` far-field approximation this
+function used before cross-checking against Starkey+2016 eq. 2 (a real
+correction this document's earlier draft got wrong -- the two forms only
+agree for `r >> h_x`, and `h_x` defaults to 3 Schwarzschild radii, the same
+order of magnitude as `r_in` itself, so the difference matters exactly in
+the regime this function spends the most time in):
+
+```
+T_irr**4(r) = K_irr * h_x / (r**2 + h_x**2)**1.5
+```
+
+`h_x` (`lamppost_height_rs`, default 3.0, Starkey+2016's own illustrative
+value) is expressed in Schwarzschild radii and converted to light-days via
+the same `M_BH`-based helper as `r_in`. The two terms are combined as
+`T**4(r) = w * T_irr**4(r) + (1-w) * T_visc**4(r)` for a mixing weight `w`
+(`irradiation_weight`), or just the viscous term alone by default.
 
 Both `K_visc` and `K_irr`'s radial *power-law index* (`viscous_slope`,
-`irradiation_slope`, default 0.75 each, the standard thin-disk value) are
-fixed, not inferred, matching `response_function`'s existing convention of
-fixed shape hyperparameters.
+`irradiation_slope`, default 0.75 each, the standard thin-disk value, and
+what eq. 2 reduces to for `r >> r_in, h_x`) are fixed, not inferred,
+matching `response_function`'s existing convention of fixed shape
+hyperparameters.
 
 **Absolute calibration -- a deliberate departure from the Fortran.** The
 Fortran derives `K_visc`/`K_irr` from `G`, the Stefan-Boltzmann constant,
@@ -74,8 +101,8 @@ function `response_function` uses -- to fix a characteristic radius
 `wavelength * T = b`, to fix the temperature at that radius. This ties the
 two response families together: switching a band from `response_function`
 to `thin_disk_response` keeps `log_mdot`'s meaning the same. Only the
-disk's inner edge (the ISCO, `r_in = 6GM/c**2`) uses real physical
-constants directly, since that conversion needs no accretion-rate
+disk's inner edge and the lamppost height use real physical constants (G,
+c, M_sun) directly, since that conversion needs no accretion-rate
 calibration at all.
 
 One consequence worth being explicit about: because `r_ref` is only a
@@ -83,7 +110,7 @@ One consequence worth being explicit about: because `r_ref` is only a
 actual mean, `thin_disk_response`'s empirical mean lag comes out somewhat
 larger than `lag_scaling`'s pivot value (the physical response has real
 weight extending well beyond `r_ref`) -- see the worked numbers in
-section 5. `response_function`'s mean lag isn't exactly the pivot value
+section 6. `response_function`'s mean lag isn't exactly the pivot value
 either, for the same reason (a skew-normal's mean isn't its `loc`
 parameter once it's skewed). `lag_scaling` fixes the *scale*, not the
 *exact* mean, for either response family.
@@ -92,26 +119,29 @@ parameter once it's skewed). `lag_scaling` fixes the *scale*, not the
 
 A patch of disk at radius `r` and azimuth `phi` (measured from the
 observer's line of sight projected onto the disk plane) is farther from
-the observer, by light-travel time, than the disk's centre by:
+the observer, by light-travel time, than the disk's centre by (Starkey+2016
+eq. 5):
 
 ```
-tau(r, phi) = r * (1 + sin(inclination) * cos(phi))
+tau(r, phi) = r * (1 + cos(phi) * sin(inclination))
 ```
 
 Face-on (`inclination = 0`), every azimuth has the same delay `r`,
 whatever the radius, so the whole ring at radius `r` contributes at a
 single lag. Inclined, the near side (`cos(phi) = -1`) arrives earlier and
 the far side (`cos(phi) = +1`) later than the ring's mean -- this is what
-gives the response its inclination-dependent skew. Critically,
-`integral_0^{2 pi} cos(phi) dphi = 0`, so **the ring's mean delay is `r`
-regardless of inclination**: inclination reshapes the response around a
-fixed mean, exactly the same requirement `response_function` satisfies by
-construction (`CLAUDE.md` decision #4), except here it falls directly out
-of the geometry rather than being imposed on a skew-normal's parameters
-after the fact. Section 5 shows this holds numerically, not just in the
-idealised integral.
+gives the response its inclination-dependent skew, exactly as
+Starkey+2016 describes it: "Tilting the disc makes the response function
+more skewed; it peaks at shorter lags and develops a tail toward large
+lags." Critically, `integral_0^{2 pi} cos(phi) dphi = 0`, so **the ring's
+mean delay is `r` regardless of inclination**: inclination reshapes the
+response around a fixed mean -- the same requirement `response_function`
+satisfies by construction (`CLAUDE.md` decision #4), and the paper states
+explicitly too ("The mean delay... is independent of inclination"). Note
+that `h_x` (the lamppost height) does *not* appear in the delay surface --
+matching eq. 5 exactly -- only in the temperature profile above.
 
-## 4. Response weight and the disk integral
+## 4. Response weight and the analytic disk integral
 
 Each `(r, phi)` patch's contribution to `psi(tau)` is weighted by how
 strongly its emission responds, in the observing band, to a small heating
@@ -124,88 +154,77 @@ weight(r) = X**5 * exp(X) / (exp(X) - 1)**2
 ```
 
 times the disk-plane area element `r dr dphi`. Putting the last three
-sections together, the full (idealised, continuous) disk integral is:
+sections together, the full disk integral is:
 
 ```
-psi_raw(tau) = integral_{r_in}^{r_max} integral_0^{2 pi}
+psi_raw(tau) = integral_{r_in}^{infinity} integral_0^{2 pi}
                    weight(r) * delta(tau - tau(r, phi)) * r dr dphi
 ```
 
 with `delta` a Dirac delta picking out exactly the `(r, phi)` patches that
-land at each `tau`. `psi` is this normalised to unit area on `tau_grid`,
-and zeroed for `tau < 0` (automatically satisfied here, since
-`tau(r, phi) >= r(1 - sin(inclination)) >= 0` for `inclination <= 90` deg,
-unlike the skew-normal, which needs an explicit `tau >= 0` cutoff).
+land at each `tau`.
 
-**Deterministic quadrature, not Monte Carlo -- the second deliberate
-departure from the Fortran.** The Fortran evaluates this integral by
-randomly sampling `(r, phi)` and smoothing the samples onto the output
-`tau` grid with a Gaussian kernel; being random, it isn't reproducible or
-differentiable the way NUTS needs. `thin_disk_response` instead uses a
-*fixed* grid: `n_r` log-spaced radii and `n_phi` evenly-spaced azimuths,
-and keeps the Fortran's own idea of a Gaussian-kernel deposit onto
-`tau_grid` -- not for the same reason as the Fortran (smoothing over
-sampling noise), but because it is what keeps this differentiable at all.
-A hard histogram/binning deposit has **exactly zero gradient** with
-respect to `log_mdot` and `inclination` almost everywhere, for the same
-reason a hard top-hat has zero gradient with respect to its centre (see
-`forward_model.tophat_response_free`'s docstring and `CLAUDE.md` decision
-#7): autodiff does not backpropagate through which bin a value lands in,
-only through smooth functions of it. `tests/test_thin_disk_response.py`
-checks this directly with `jax.grad` rather than trusting it by
-inspection.
+**This integral has an exact closed form in `r`, with no approximation
+needed.** At *fixed* `phi`, `tau(r, phi) = r * (1 + cos(phi)
+sin(inclination))` is *linear* in `r`, so the delta function collapses the
+radial integral onto a single root,
 
-**Quadrature resolution matters more than it looks like it should.** An
-initial default of `n_r=40, n_phi=24` passed every numeric test (it is
-still causal, still area-normalised, still has non-zero gradients) but
-produced a visibly jagged, under-converged curve once actually plotted --
-exactly the two figures in this document, which is how the problem was
-found. The defaults are now `n_r=50, n_phi=64`, and the figures below use
-`n_r=400, n_phi=96` (regenerated by
-`scripts/plot_thin_disk_response_scalings.py`) because illustration
-quality matters more here than the per-evaluation speed a real fit cares
-about. Two things drive how much resolution is actually needed:
-inclination=0 removes all `phi`-dependence from `tau(r, phi)` (it equals
-`r` for every `phi`), so only `n_r` can smooth a face-on curve; and the
-radial grid is log-spaced, so a response sitting at large `r` (high
-`mdot`) is resolved far more coarsely, in absolute terms, than one at
-small `r`, for the same `n_r`. Raise `n_r`/`n_phi` (or plot a candidate
-`psi`) before trusting a fit that pushes `log_mdot` or `inclination` well
-outside the ranges checked here.
+```
+r*(phi, tau) = tau / (1 + cos(phi) * sin(inclination))
+```
 
-**A second, related resolution issue: high inclination silently expands
-`r_max`.** `r_max` originally came from the largest radius that could
-geometrically contribute at `tau_grid[-1]`,
-`tau_grid[-1] / (1 - sin(inclination))` -- fine face-on, but at
-`inclination=80` degrees this is already ~66x larger than at
-`inclination=0` for the same `tau_grid`, and ~100x larger still at
-`inclination=89`. Since the radial grid is log-spaced over
-`[r_in, r_max]`, the same `n_r` is spread over a domain up to two orders of
-magnitude bigger, leaving it far too coarse right where the response
-actually has weight -- this, not `n_r` alone, is what was producing visible
-waviness in high-inclination curves even at otherwise-generous resolution.
-The fix is `r_max_factor` (default 20): `r_max` is capped at
-`r_max_factor * tau_ref` (`tau_ref` from :func:`lag_scaling`) regardless of
-how large the geometric formula would allow it to grow, since the Planck-
-derivative response weight (section 4) decays exponentially in radius and
-is already negligible well within 20x `tau_ref` -- confirmed directly
-against an uncapped, far-higher-resolution reference at `inclination=80`:
-maximum absolute difference ~2e-4, i.e. the cap discards no real signal
-while keeping the log-spaced grid concentrated where it matters.
+with Jacobian `d(tau)/dr = 1 + cos(phi) sin(inclination)` (constant in
+`r`, at fixed `phi`), leaving:
+
+```
+psi_raw(tau) = tau * integral_0^{2 pi}
+                   weight(r*(phi, tau)) / (1 + cos(phi) sin(inclination))**2 dphi
+```
+
+a plain 1-D integral over a *fixed* `phi` grid (`n_phi`, evenly spaced),
+evaluated the same way for every `tau_grid` point via a uniform Riemann
+sum -- exact for a periodic integrand, no `trapz` edge correction needed.
+`psi` is this normalised to unit area on `tau_grid`, and zeroed for
+`tau < 0` (automatically satisfied by the geometry: `tau(r, phi) >= r(1 -
+sin(inclination)) >= 0` for `inclination <= 90` degrees, same as before).
+The only masking needed is excluding `r* < r_in` (no disk material inside
+the ISCO), done with a *smooth* sigmoid rather than a hard cutoff, since
+`r*` depends on `inclination`, a sampled parameter, and a hard `jnp.where`
+there would carry the same zero-gradient risk already documented for
+`tophat_response_free` (`CLAUDE.md` decision #7).
+
+**This replaces an earlier two-radial-grid, Gaussian-kernel-deposit
+implementation entirely**, which needed a separate log-spaced radial grid
+(`n_r`), a domain cutoff (`r_max_factor`) and a smoothing bandwidth
+(`smoothing_days`) to avoid visible quadrature artefacts -- worst exactly
+at high inclination, where the naive radial domain a face-on response
+needs blows up by two to three orders of magnitude (documented at length
+in git history and the superseded parts of `CLAUDE.md` decision #8, kept
+there as a record of what was tried and why it wasn't good enough, not as
+current guidance). None of that machinery is needed here: there is no
+radial grid to under-resolve, no smoothing bandwidth to tune, and no
+truncation to get wrong, because the radial integral was never
+approximated -- it was solved. Removing the radial dimension also drops
+the cost from `O(n_r * n_phi * n_tau)` to `O(n_phi * n_tau)`, confirmed
+**~25x faster per call** at matched quality, with `n_phi=200` (the current
+default) already fully converged where the old implementation needed
+`n_r=400` *and* still showed residual artefacts at extreme inclination or
+accretion rate.
 
 ## 5. A precomputed, interpolated fast path for MCMC
 
-`thin_disk_response`'s O(n_r * n_phi * n_tau) disk integral is
-considerably more expensive than `response_function`'s closed form, and
-NUTS calls a band's response function on every leapfrog step of every
-sample -- recomputing the full integral that often is wasteful, since only
-`log_mdot` and `inclination` change step to step, not the disk's physics.
+Even at `O(n_phi * n_tau)`, NUTS calls a band's response function on every
+leapfrog step of every sample, so there is still a real cost to
+recomputing the full integral that often when only `log_mdot` and
+`inclination` change step to step, not the disk's physics.
 
 `build_thin_disk_response_table` / `build_thin_disk_response_fast`
 implement the same fix the author used for this in the PhD-era CREAM
-Fortran code: precompute the response once, on a grid of inclinations
-(1-5 degree spacing, historically), at one reference accretion rate; then
-get any other inclination by interpolating that grid, and any other
+Fortran code (confirmed directly in `cream_f90.f90`: a `psistore(:,ist)`
+array precomputed once across an inclination grid, `degstore = (ist-1) *
+ddeginc`, at one fixed reference `umdotref`/`wavref`): precompute the
+response once, on a grid of inclinations, at one reference accretion rate;
+then get any other inclination by interpolating that grid, and any other
 accretion rate (or wavelength) by *stretching* the lag axis according to
 the `mdot**(1/3)` / `wavelength**(4/3)` scaling `lag_scaling` already uses,
 rather than recomputing the disk integral at all:
@@ -227,37 +246,48 @@ Concretely, for a given `(log_mdot, wavelength, inclination)`:
    `s` to keep the area normalised to 1 under that change of variables.
 
 Both steps are lookups against fixed tables, `O(n_u + n_tau)` rather than
-`O(n_r * n_phi * n_tau)` -- confirmed directly at matched resolution
-(`n_r=400, n_phi=96`): **~90x faster per call**, with gradients w.r.t.
-`log_mdot` and `inclination` still non-zero (checked with `jax.grad`,
-including at an inclination *not* on the precomputed grid, the same
-discipline used for `thin_disk_response` and
+`O(n_phi * n_tau)`. Since section 4's analytic reduction already made the
+plain disk integral itself much cheaper, the fast path's relative payoff
+shrank along with it -- confirmed directly: **~4x faster per call** now
+(precomputing the table itself takes ~3 seconds), down from the ~90x this
+document reported before the analytic rewrite, when the plain version was
+still the slow O(n_r * n_phi * n_tau) grid integral. It is still a real,
+free win (no radial/azimuthal quadrature at all at call time, just two
+`jnp.interp` lookups), just no longer the dramatic, close-to-mandatory
+speedup it used to be -- for most fits, calling `thin_disk_response`
+directly is now fast enough on its own, and the fast path is worth
+reaching for mainly on long runs where every bit of per-step cost compounds.
+Gradients w.r.t. `log_mdot` and `inclination` are still non-zero (checked
+with `jax.grad`, including at an inclination *not* on the precomputed
+grid, the same discipline used for `thin_disk_response` and
 `tophat_response_free`'s gradients elsewhere in this codebase).
 
 **The stretch is an approximation, not identity, and it is honest to say
-so.** The disk isn't *exactly* self-similar under it: `r_in` (the ISCO) is
-a fixed absolute length, so it doesn't stretch along with everything else,
-meaning `r_in / tau_ref` -- and with it, how much the inner boundary
-term shapes the response -- genuinely differs between the table's
-reference point and wherever a fit actually queries it. In practice this
-shows up worst exactly where the response is sharpest: at high
-inclination, near the near-zero-lag spike from the disk's near side.
+so** -- though a much smaller one now that the underlying templates are
+exact rather than grid-noisy. The disk isn't *exactly* self-similar under
+it: `r_in` (the ISCO) is a fixed absolute length, so it doesn't stretch
+along with everything else, meaning `r_in / tau_ref` -- and with it, how
+much the inner boundary term shapes the response -- genuinely differs
+between the table's reference point and wherever a fit actually queries
+it. In practice this still shows up worst exactly where the response is
+sharpest: at high inclination, near the near-zero-lag spike from the
+disk's near side.
 
 ![thin_disk_response, fast vs exact](images/thin_disk_response_fast_vs_slow.png)
 
 Near the table's own reference point (`log_mdot=0`, `wavelength=5000`
-Angstrom), the two curves are visually indistinguishable. Far from it
-(`inclination=85` degrees, `wavelength=7000` Angstrom, `log_mdot=-0.5`),
-the mean lag still tracks well (both integrate to area 1 by construction,
-and the bulk of the curve away from the spike matches closely), but the
-spike's *peak height* is off by about 35% -- exactly the kind of
-difference a full-width plot hides and only a zoomed one shows, which is
-why the right panel above is zoomed to the peak rather than the full
-range. If a fit's posterior is expected to live mostly at high inclination
-and/or spans multiple bands at very different wavelengths, either build
-the table with `reference_wavelength` set closer to the run's own
-wavelength(s), or use the exact `thin_disk_response` directly and accept
-the slower per-step cost. This tradeoff, not a hidden bug, is exactly what
+Angstrom), the two curves are visually indistinguishable (max absolute
+difference ~0.0001, ~0.01% of the peak). Far from it (`inclination=85`
+degrees, `wavelength=7000` Angstrom, `log_mdot=-0.5`), the two are now
+close even zoomed right into the spike -- max absolute difference ~0.08,
+about 4% of the peak height, down from ~35% before the analytic rewrite --
+and the mean lag still tracks well (1.9935 exact vs 1.9902 fast). If a
+fit's posterior is expected to live mostly at high inclination and/or
+spans multiple bands at very different wavelengths, building the table
+with `reference_wavelength` set closer to the run's own wavelength(s)
+narrows this further; using the exact `thin_disk_response` directly
+removes it entirely, at the now-modest ~4x per-step cost from section 4.
+This tradeoff, not a hidden bug, is exactly what
 `tests/test_thin_disk_response_fast.py::test_fast_response_approximation_degrades_away_from_reference`
 checks for.
 
@@ -277,22 +307,25 @@ these PNGs if `thin_disk_response`'s physics or defaults change.
 
 | inclination (deg) | mean lag (days, numerically integrated) |
 |---:|---:|
-| 0  | 1.8805 |
-| 20 | 1.8805 |
-| 40 | 1.8805 |
-| 60 | 1.8810 |
-| 80 | 1.9111 |
+| 0  | 1.880500 |
+| 20 | 1.880500 |
+| 40 | 1.880469 |
+| 60 | 1.880336 |
+| 80 | 1.875719 |
 
 The response visibly reshapes (a broad, near-symmetric peak face-on;
 an increasingly sharp near-zero-lag spike at high inclination, from the
 disk's near side), while the dashed vertical lines, each curve's own
 numerically integrated mean lag, sit essentially on top of each other:
-flat to 4 significant figures out to 60 degrees, and within 1.6% even at
-80 degrees (the extreme case, where the radial integration domain has to
-extend much farther to capture the far side's long tail, which is also
-where quadrature truncation error is largest). This is section 3's
-`integral cos(phi) dphi = 0` argument, confirmed numerically rather than
-just algebraically.
+flat to 5 significant figures out to 60 degrees, and within 0.3% even at
+80 degrees. This is section 3's `integral cos(phi) dphi = 0` argument and
+Starkey+2016's own inclination-independence claim, both confirmed
+numerically rather than just algebraically -- and, since section 4's
+reduction is now exact rather than grid-based, this flatness reflects the
+underlying physics directly rather than partly being a side effect of
+quadrature resolution (an earlier version of this table, before the
+analytic rewrite, was flat to only 4 significant figures and drifted to
+1.6% by 80 degrees, for exactly that reason).
 
 ### Accretion-rate sweep (fixed face-on inclination)
 
@@ -311,11 +344,11 @@ just algebraically.
 The mean lag grows monotonically with `mdot`, close to the
 `mdot**(1/3)` scaling `lag_scaling` uses (a factor of 4.48x from
 `log_mdot=-1` to `+1`, against an ideal `100**(1/3) = 4.64x` -- the small
-difference is the inner-boundary and temperature-mixing terms in section 2
-bending the pure power law, exactly as they would for a real disk). As
-section 2 already flags, the empirical mean lag sits above the
-`lag_scaling` reference radius at every `mdot` -- `lag_scaling` fixes the
-response's characteristic scale, not its exact mean.
+difference is the inner-boundary term in section 2 bending the pure power
+law, exactly as it would for a real disk). As section 2 already flags, the
+empirical mean lag sits above the `lag_scaling` reference radius at every
+`mdot` -- `lag_scaling` fixes the response's characteristic scale, not its
+exact mean.
 
 ## 7. API summary
 
@@ -330,16 +363,18 @@ psi = thin_disk_response(tau_grid, log_mdot, wavelength, inclination, M_BH)
 # or swap it in for "physical"-mode bands (see CLAUDE.md decision #5)
 model.response_function = get_response("thin_disk")
 
-# or use the fast, precomputed-template approximation (section 5) instead,
-# for a real fit where per-step cost matters
+# or use the precomputed-template fast path (section 5) for a real fit --
+# now a smaller win than it used to be, since thin_disk_response itself
+# got ~25x cheaper, but still free performance with a documented accuracy
+# tradeoff
 model.response_function = build_thin_disk_response_fast(M_BH=1e8)
 ```
 
 See `thin_disk_response`'s own docstring in `forward_model.py` for the
 full parameter list (`viscous_slope`, `include_irradiation`,
-`irradiation_slope`, `irradiation_weight`, `n_r`, `n_phi`, `r_max_factor`,
-`smoothing_days`), `build_thin_disk_response_table`'s docstring for the
-fast path's own parameters (`incl_grid`, `reference_log_mdot`,
-`reference_wavelength`, `u_max_factor`, `n_u`), and `README.md`'s
-"Swapping the response function" section for how these relate to the
-default skew-normal and to `echofit/responses.py`'s registry.
+`irradiation_slope`, `irradiation_weight`, `lamppost_height_rs`, `n_phi`),
+`build_thin_disk_response_table`'s docstring for the fast path's own
+parameters (`incl_grid`, `reference_log_mdot`, `reference_wavelength`,
+`u_max_factor`, `n_u`), and `README.md`'s "Swapping the response function"
+section for how these relate to the default skew-normal and to
+`echofit/responses.py`'s registry.

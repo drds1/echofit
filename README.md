@@ -349,17 +349,22 @@ on `tau_grid`. Two are built in:
 
 * `response_function` (the default): an ad-hoc but cheap skew-normal shape,
   fast to evaluate every NUTS step.
-* `thin_disk_response`: a physically-motivated accretion-disk response,
-  ported (as a deterministic, JAX-differentiable quadrature, not a literal
-  translation) from the author's PhD-era CREAM Fortran code
+* `thin_disk_response`: a physically-motivated accretion-disk response
+  following Starkey, Horne & Villforth (2016, MNRAS 456, 1960;
+  [arXiv:1511.06162](https://arxiv.org/abs/1511.06162), the CREAM paper),
+  cross-checked directly against that paper's equations and against the
+  author's PhD-era CREAM Fortran code
   ([`pycecream`](https://github.com/drds1/pycecream)`/cream_f90.f90`'s
-  `tfbx`/`tr4visc`/`tr4irad`). It integrates a genuine Shakura-Sunyaev
-  viscous (+ optional lamppost-irradiation) temperature profile over the
-  disk's light-travel-time delay surface, weighted by the Planck-function
+  `tfbx`/`tr4visc`/`tr4irad`). It combines a genuine Shakura-Sunyaev
+  viscous + lamppost-irradiation temperature profile with the disk's own
+  light-travel-time delay surface, weighted by the Planck-function
   temperature derivative -- giving inclination-driven skew and a hard
-  causal edge from the geometry itself, rather than an assumed shape. It's
-  slower per evaluation (integrated over a radius/azimuth grid, not
-  closed-form) and exposed via `echofit.responses` for discoverability:
+  causal edge from the geometry itself, rather than an assumed shape.
+  Unlike the closed-form skew-normal, this is a genuine disk integral, but
+  an **exact analytic one**: the two radius/azimuth integral reduces, via a
+  delta-function argument, to a single 1-D integral over azimuth (no
+  radial grid, no smoothing bandwidth, no truncation), exposed via
+  `echofit.responses` for discoverability:
 
   ```python
   import echofit.model as model
@@ -370,20 +375,21 @@ on `tau_grid`. Two are built in:
 
   See [`docs/thin_disk_response.md`](docs/thin_disk_response.md) for
   exactly how this is computed (temperature profile, delay surface,
-  response weighting, and why it's a deterministic quadrature rather than
-  the Fortran's Monte Carlo), plus charts verifying that inclination
-  reshapes the response without moving its mean lag, and that the mean lag
-  scales with accretion rate the way thin-disk theory predicts.
+  response weighting, and the analytic azimuthal-integral derivation),
+  plus charts verifying that inclination reshapes the response without
+  moving its mean lag, and that the mean lag scales with accretion rate
+  the way thin-disk theory predicts.
 
-  Because that disk integral is much more expensive than the closed-form
-  skew-normal and NUTS calls a band's response function on every leapfrog
-  step, there's also a fast path, `build_thin_disk_response_fast`: it
-  precomputes `thin_disk_response` once across a grid of inclinations, then
-  gets any other inclination via interpolation and any other accretion
-  rate/wavelength by *stretching* the lag axis according to
-  `lag_scaling`'s own `mdot**(1/3)`/`wavelength**(4/3)` law, the same
+  There's also a fast path, `build_thin_disk_response_fast`, for the
+  common case of NUTS calling a band's response function on every leapfrog
+  step: it precomputes `thin_disk_response` once across a grid of
+  inclinations, then gets any other inclination via interpolation and any
+  other accretion rate/wavelength by *stretching* the lag axis according
+  to `lag_scaling`'s own `mdot**(1/3)`/`wavelength**(4/3)` law, the same
   precompute-and-stretch trick used in the author's PhD-era CREAM code --
-  confirmed ~90x faster per call at matched resolution:
+  confirmed ~4x faster per call (a smaller win than it used to be, now
+  that the analytic reduction above already made the plain version ~25x
+  cheaper on its own):
 
   ```python
   from echofit.forward_model import build_thin_disk_response_fast
