@@ -291,7 +291,9 @@ See `notebooks/demo.ipynb` for the full walkthrough.
 
 **From the terminal, with no Python required:** `scripts/fit_lightcurves.py`
 wraps everything below as a command-line tool, reading each band's light
-curve from a plain `t y yerr` text file:
+curve from a plain text file, three columns `t y yerr` (whitespace- or
+comma-separated, one observation per line, `#`-prefixed lines ignored --
+time in days, on a consistent zero-point across every band):
 
 ```bash
 python scripts/fit_lightcurves.py \
@@ -300,12 +302,38 @@ python scripts/fit_lightcurves.py \
     --num-warmup 1000 --num-samples 2000 --checkpoint-every 200
 ```
 
-See `python scripts/fit_lightcurves.py --help` for the full argument list
-(free-lag bands, a driver light curve, `--num-chains`/`--chain-method`,
-`--report-every`, `--output-dir`, ...), and `scripts/run_example_fit.sh` for
-a complete, runnable, heavily-commented example (including generating
-example data via `scripts/make_example_data.py` first) -- copy/adapt it as
-a starting command file.
+`--band NAME WAVELENGTH PATH` is repeatable (one per band); the full
+argument list also covers `--free-lag-band`/`--driver` (see "Emission-line
+/ free-lag mode" below), `--num-chains`/`--chain-method`/`--max-tree-depth`,
+`--report-every`, `--output-dir`, `--n-freq`/`--n-tau`/`--tau-max`, and
+`--resume` -- run `python scripts/fit_lightcurves.py --help` for all of it.
+
+**`scripts/run_example_fit.sh` is a complete, runnable command file** built
+on that CLI -- a template to copy and adapt for a real campaign rather than
+writing one from scratch. Run it directly:
+
+```bash
+./scripts/run_example_fit.sh
+```
+
+It runs four steps in sequence, each one a plain `python scripts/...`
+invocation you can copy out individually:
+
+1. `scripts/make_example_data.py` writes a synthetic two-band dataset to
+   `example_data/*.txt` in the CLI's expected format -- swap this step out
+   for your own light curve files.
+2. A managed/checkpointed fit (`--title example_ngc`, `--checkpoint-every
+   100 --report-every 200`), writing everything to
+   `outputs/example_ngc/run_<timestamp>/` as described below.
+3. `--resume`-ing that same run (a no-op here since step 2 already finished
+   -- this is the command to re-run after a crash or interruption instead).
+4. A quick, non-checkpointed 4-chain diagnostic fit (`--num-chains 4
+   --chain-method vectorized`, no `--title`), for R-hat/ESS convergence
+   checks rather than a production run, writing a one-off report to
+   `diagnostic_run/`.
+
+Each step prints where its `report.html` landed; open it in a browser to
+see the fit.
 
 **From Python directly:** pass `title=` (e.g. an AGN name) to have
 `EchoFit` manage on-disk outputs for the run -- data, config, periodic
