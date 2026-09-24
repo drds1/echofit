@@ -38,6 +38,25 @@ can't mimic an additive common shift. The free-lag response has no such
 tie: each band's lag is independent, so the degeneracy is exact, and a
 fit using it for any band needs a driver light curve (or some other
 external anchor) to be identifiable.
+
+Driver amplitude note: a global rescale of the driver by any lambda != 0
+(``S, C -> lambda*S, lambda*C``), compensated by rescaling every band's
+gain by ``1/lambda`` (``S_band -> S_band/lambda`` for every band), also
+leaves every predicted light curve, and hence the likelihood, exactly
+unchanged -- unlike the shift degeneracy above, this holds regardless of
+lag_mode or how many bands there are, since it's a property of the model's
+linear driver-amplitude/per-band-gain separability, not the disk physics.
+It's broken only by the priors, not the data: with `sigma_drw`'s prior
+scale a fixed constant unrelated to the actual light curves' units, this
+direction is only weakly regularised, which shows up as the inferred
+driver visibly growing/shrinking with little constraint early in a chain
+(see the GIF in README.md). ``EchoFit`` anchors `sigma_drw`'s prior scale
+to the registered data's own amplitude instead (see
+``EchoFit._sigma_drw_prior_scale``) -- the same fix, by the same
+mechanism, as the author's PhD-era CREAM Fortran code's optional Gaussian
+prior on its power-spectrum normalisation `P0` (`cream_f90.f90`'s `bof4`,
+gated by `sigp0square`/`siglogp0`), which plays the same role as
+`sigma_drw` here.
 """
 
 from __future__ import annotations
@@ -78,6 +97,7 @@ def reverberation_model(
     M_BH: Optional[float],
     bands: Dict[str, dict],
     driver: Optional[dict] = None,
+    sigma_drw_prior_scale: float = 2.0,
 ):
     """NumPyro model for multi-band reverberation-mapped light curves.
 
@@ -103,9 +123,16 @@ def reverberation_model(
         ``{"t", "y", "yerr"}`` for a light curve that directly (zero-lag)
         observes the driver itself, e.g. an X-ray/lamppost continuum, or a
         directly-monitored AGN continuum anchoring an emission-line fit.
+    sigma_drw_prior_scale : float
+        Scale of ``sigma_drw``'s ``HalfNormal`` prior. ``EchoFit`` sets this
+        from the registered light curves' own data (see
+        ``EchoFit._sigma_drw_prior_scale``) rather than leaving it a fixed
+        constant -- see the module docstring's "driver amplitude" note for
+        why. Defaults to the old fixed value only for direct/standalone
+        calls to this function.
     """
     # -- shared driving-source (DRW) hyperparameters --------------------
-    sigma_drw = numpyro.sample("sigma_drw", dist.HalfNormal(2.0))
+    sigma_drw = numpyro.sample("sigma_drw", dist.HalfNormal(sigma_drw_prior_scale))
     tau_drw = numpyro.sample("tau_drw", dist.LogNormal(loc=jnp.log(20.0), scale=1.0))
 
     prior_scale = drw_prior_scale(freqs, sigma_drw, tau_drw)
