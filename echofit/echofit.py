@@ -227,7 +227,31 @@ class EchoFit:
         return dict(
             freqs=self.freqs, tau_grid=self.tau_grid, M_BH=self.M_BH,
             bands=bands_jax, driver=driver_jax,
+            sigma_drw_prior_scale=self._sigma_drw_prior_scale(),
         )
+
+    def _sigma_drw_prior_scale(self) -> float:
+        """Data-anchored scale for ``sigma_drw``'s ``HalfNormal`` prior (see
+        ``model.py``'s "driver amplitude" docstring note).
+
+        A fixed prior scale, unrelated to the actual light curves' units,
+        only weakly regularises the exact driver-amplitude/per-band-gain
+        rescaling degeneracy every fit has -- anchoring it to the data
+        instead is the same fix, by the same mechanism, as the author's
+        PhD-era CREAM Fortran code's optional prior on its power-spectrum
+        normalisation ``P0``. Prefers a registered driver light curve's own
+        std (the most direct available observation of the driver, if one
+        was registered via ``add_driver_lightcurve``); otherwise the largest
+        std across the registered bands, since the least-reprocessed band is
+        the closest available proxy for the driver's own amplitude (a
+        reprocessed echo is usually damped relative to what drives it, not
+        amplified).
+        """
+        if self.driver_data is not None:
+            scale = float(np.std(self.driver_data["y"]))
+        else:
+            scale = max(float(np.std(d["y"])) for d in self.bands.values())
+        return max(scale, 1e-3)
 
     def _validate_before_fit(self):
         has_physical = any(d["lag_mode"] == "physical" for d in self.bands.values())
