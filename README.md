@@ -51,10 +51,17 @@ Measuring those lags precisely (**continuum reverberation mapping**) is
 one of the few ways to measure an accretion disk's size directly, rather
 than inferring it from a spectral model, and it's turned out to be a
 genuinely useful stress test for disk theory: continuum RM campaigns (e.g.
-AGN STORM, the SDSS Reverberation Mapping project) have repeatedly found
-disks several times larger than standard thin-disk theory predicts for the
-same black hole mass and accretion rate: a persistent "disk size problem"
-that better lag measurements, not just better spectra, can help resolve.
+AGN STORM[^2], the SDSS Reverberation Mapping project[^3]) have repeatedly
+found disks several times larger than standard thin-disk theory predicts
+for the same black hole mass and accretion rate: a persistent "disk size
+problem" that better lag measurements, not just better spectra, can help
+resolve.
+
+[^2]: De Rosa et al. 2015, ApJ, 806, 128 (project overview); Fausnaugh et
+    al. 2016, ApJ, 821, 56 (the continuum lags/disk-size result itself).
+
+[^3]: Shen et al. 2015, ApJS, 216, 4 (project overview); Grier et al. 2017,
+    ApJ, 851, 21 (the continuum-lag disk-size result itself).
 
 It's a genuinely hard fitting problem, though: real light curves are noisy
 and irregularly sampled with observing gaps, and each band's flux is
