@@ -14,11 +14,13 @@ tests on synthetic data, and example usage.
     [arXiv:1511.06162](https://arxiv.org/abs/1511.06162), whose
     disk-response model this code implements.
 
-![The driving light curve and each band's fitted echo taking shape over the first 150 MCMC samples, starting from a barely-warmed-up chain and settling into the data](docs/images/fit_animation.gif)
+![The driving light curve, each band's fitted echo and response function, and an illustrative view of the accretion disk tilting with inclination, all taking shape over the first 150 MCMC samples of a barely-warmed-up chain](docs/images/fit_animation.gif)
 
-*The driver and per-band fits early in a NUTS chain (short warmup on
-purpose, so the Fourier coefficients are still visibly finding their way)
--- regenerate with `python scripts/make_fit_animation.py`.*
+*The driver, per-band echo/response-function fits, and an illustrative
+disk-temperature view (tilting with the inclination parameter, eye-on-a-
+sphere marking the observer) early in a NUTS chain (short warmup on
+purpose, so everything is still visibly finding its way) -- regenerate
+with `python scripts/make_fit_animation.py`.*
 
 ## 🗂️ Contents
 

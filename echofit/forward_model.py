@@ -239,6 +239,44 @@ def _schwarzschild_radius_light_days(M_BH):
     return 2.0 * r_g_m / _LIGHT_DAY_M
 
 
+def disk_temperature_profile(r, log_mdot, wavelength, M_BH, viscous_slope: float = 0.75):
+    """Axisymmetric Shakura-Sunyaev viscous disk temperature (Kelvin) as a
+    function of radius ``r`` (light-days).
+
+    Deliberately mirrors ``thin_disk_response``'s own internal ``t4_visc``/
+    Wien's-law computation (same formula, same reference point) rather than
+    the two sharing code, since ``thin_disk_response`` evaluates on a 2-D
+    ``(tau, phi)`` grid via the disk's light-travel-time surface, not a
+    plain radius -- this is for callers that just want "the temperature at
+    radius r" directly, e.g. a disk visualisation (see
+    ``scripts/make_fit_animation.py``), independent of any particular
+    response-function evaluation. Ignores the optional lamppost-irradiation
+    term (``thin_disk_response``'s ``include_irradiation``), which is
+    azimuthally asymmetric and not meaningful for a purely radius-dependent
+    profile.
+
+    Parameters
+    ----------
+    r : array_like
+        Radius (light-days), any shape. Clipped at the ISCO (3
+        Schwarzschild radii) from below -- there's no disk material inside
+        it, so no temperature to report.
+    log_mdot, wavelength, M_BH, viscous_slope
+        As in ``thin_disk_response``: ``log_mdot``/``wavelength``/``M_BH``
+        set the absolute temperature scale via ``lag_scaling``'s Wien-radius
+        anchor (``T(tau_ref) = b / wavelength`` exactly, Wien's law).
+    """
+    tau_ref = lag_scaling(log_mdot, wavelength, M_BH)
+    r_in = 3.0 * _schwarzschild_radius_light_days(M_BH)
+    r_safe = jnp.clip(r, r_in, None)
+    visc_inner_term = (1.0 - jnp.sqrt(r_in / r_safe)) / jnp.clip(
+        1.0 - jnp.sqrt(r_in / tau_ref), 1e-6, None
+    )
+    t4_shape = (tau_ref / r_safe) ** (4.0 * viscous_slope) * visc_inner_term
+    t_ref_kelvin = _WIEN_B_ANGSTROM_KELVIN / wavelength
+    return t_ref_kelvin * jnp.clip(t4_shape, 1e-12, None) ** 0.25
+
+
 def thin_disk_response(
     tau_grid,
     log_mdot,

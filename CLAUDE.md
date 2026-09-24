@@ -405,6 +405,30 @@ and package layout.
     `ef._extra_fields_by_chain`/`ef.bands`, which is what makes updating
     those mid-fit sufficient for a mid-fit report to work at all.
 
+13. **`scripts/make_fit_animation.py` and `forward_model.disk_temperature_profile`
+    are a demo/visualisation aid, not part of the fitting pipeline itself.**
+    The GIF embedded in README.md's opener renders driver/echo/response-
+    function panels plus an illustrative accretion-disk view (temperature-
+    coloured, squashed vertically by `cos(inclination)` each frame, with a
+    small eye-on-a-sphere marking the observer) evolving sample by sample
+    early in a deliberately short-warmup chain. `disk_temperature_profile`
+    factors out the axisymmetric Shakura-Sunyaev `T(r)` calculation
+    `thin_disk_response` already computes internally (same formula, same
+    Wien's-law reference point -- see `tests/test_thin_disk_response.py`'s
+    `test_disk_temperature_profile_matches_wien_law_at_the_reference_radius`)
+    so the animation (or any other caller wanting "temperature at radius
+    r" directly) doesn't have to duplicate that physics; deliberately
+    *not* refactored to share code with `thin_disk_response`'s own
+    2-D `(tau, phi)`-grid evaluation, to avoid any regression risk to that
+    already-validated function for a purely cosmetic reuse. Always uses
+    the viscous-only profile at a fixed illustrative reference wavelength
+    (5000 Angstrom), regardless of which response function the fit itself
+    used or what wavelengths its bands are at -- only the thin-disk
+    response family has a literal disk geometry to show, and the picture
+    is meant to convey the physics qualitatively, not represent the
+    specific fit's own bands. The disk "tilt" is a simple 2-D orthographic
+    squash, not a 3-D/raytraced render.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model
