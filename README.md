@@ -363,8 +363,10 @@ on `tau_grid`. Two are built in:
   Unlike the closed-form skew-normal, this is a genuine disk integral, but
   an **exact analytic one**: the two radius/azimuth integral reduces, via a
   delta-function argument, to a single 1-D integral over azimuth (no
-  radial grid, no smoothing bandwidth, no truncation), exposed via
-  `echofit.responses` for discoverability:
+  radial grid, no truncation). A single Gaussian smoothing convolution is
+  then applied on top (matching a genuine, physically-motivated part of
+  the original Fortran, not just numerical clean-up -- see the docs below
+  for why), exposed via `echofit.responses` for discoverability:
 
   ```python
   import echofit.model as model
@@ -375,10 +377,10 @@ on `tau_grid`. Two are built in:
 
   See [`docs/thin_disk_response.md`](docs/thin_disk_response.md) for
   exactly how this is computed (temperature profile, delay surface,
-  response weighting, and the analytic azimuthal-integral derivation),
-  plus charts verifying that inclination reshapes the response without
-  moving its mean lag, and that the mean lag scales with accretion rate
-  the way thin-disk theory predicts.
+  response weighting, the analytic azimuthal-integral derivation, and the
+  smoothing step and the mean-lag-vs-inclination trade-off it brings),
+  plus charts verifying that the mean lag scales with accretion rate the
+  way thin-disk theory predicts.
 
   There's also a fast path, `build_thin_disk_response_fast`, for the
   common case of NUTS calling a band's response function on every leapfrog
@@ -387,9 +389,9 @@ on `tau_grid`. Two are built in:
   other accretion rate/wavelength by *stretching* the lag axis according
   to `lag_scaling`'s own `mdot**(1/3)`/`wavelength**(4/3)` law, the same
   precompute-and-stretch trick used in the author's PhD-era CREAM code --
-  confirmed ~4x faster per call (a smaller win than it used to be, now
-  that the analytic reduction above already made the plain version ~25x
-  cheaper on its own):
+  confirmed ~1.3-1.5x faster per call (a much smaller win than it used to
+  be, now that the plain version got cheap enough on its own that the
+  smoothing convolution is a comparable cost either way):
 
   ```python
   from echofit.forward_model import build_thin_disk_response_fast

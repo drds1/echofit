@@ -113,15 +113,17 @@ def test_fast_response_has_nonzero_gradients():
 
 def test_fast_response_is_faster_than_the_exact_disk_integral():
     """thin_disk_response itself got much cheaper once it switched to the
-    analytic azimuthal-collapse formula (no radial grid at all), so the
-    templated lookup's relative speedup shrank from ~90x to a more modest
-    few-x -- still real (no radial/azimuthal quadrature at all, just two
-    jnp.interp lookups), just no longer the dramatic win it was against the
-    old O(n_r * n_phi * n_tau) grid version. Checked as "faster", not "N
-    times faster", since exactly how much depends more on JAX dispatch
-    overhead at these speeds than on either implementation's real cost."""
+    analytic azimuthal-collapse formula (no radial grid at all), and both
+    it and the templated lookup now pay for the same Gaussian-smoothing
+    convolution (an n_tau x n_tau matmul, added back for both -- see
+    CLAUDE.md decision #8), which further narrowed the templated lookup's
+    relative speedup, from ~90x (vs the old grid version) to ~4x (once the
+    analytic rewrite alone made the plain version fast) to just ~1.3-1.5x
+    now that a comparable cost is shared by both. Checked as "faster", not
+    "N times faster", since it's a real but now genuinely modest win, and
+    at small tau_grid sizes the two can be within noise of each other."""
     fast = build_thin_disk_response_fast(M_BH, **_SMALL_TABLE_KWARGS)
-    tau_grid = jnp.linspace(0.0, 15.0, 300)
+    tau_grid = jnp.linspace(0.0, 15.0, 600)
 
     psi = thin_disk_response(tau_grid, 0.0, 5000.0, 30.0, M_BH)
     psi.block_until_ready()
