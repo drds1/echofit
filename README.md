@@ -16,12 +16,16 @@ tests on synthetic data, and example usage.
 
 ![The driving light curve, each band's fitted echo and response function, a face-on accretion-disk temperature view, and a side-on schematic of the disk tilting with inclination against a fixed observer, all taking shape over the first 150 MCMC samples of a barely-warmed-up chain](docs/images/fit_animation.gif)
 
-*The driver, per-band echo/response-function fits, a face-on disk-
-temperature view (titled with the frame's current log_mdot/inclination),
-and a side-on schematic where the disk line tilts with inclination while
-the eye-on-a-sphere observer and its line of sight stay fixed -- all early
-in a NUTS chain (short warmup on purpose, so everything is still visibly
-finding its way). Regenerate with `python scripts/make_fit_animation.py`.*
+*The driver, per-band echo/response-function fits (each with its own
+68%/95% credible envelope, expanding cumulatively as more samples
+accumulate -- wide early, narrowing as the chain converges), each band
+coloured by its real-world wavelength (X-ray black, UV violet, visible its
+actual spectral colour, IR+ reddish), a face-on disk-temperature view
+(titled with the frame's current log_mdot/inclination), and a side-on
+schematic where the disk line tilts with inclination while the eye-on-a-
+sphere observer and its line of sight stay fixed -- all early in a NUTS
+chain (short warmup on purpose, so everything is still visibly finding its
+way). Regenerate with `python scripts/make_fit_animation.py`.*
 
 ## 🗂️ Contents
 

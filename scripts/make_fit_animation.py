@@ -31,6 +31,14 @@ column is wider than the other two -- ``width_ratios``):
   (middle, x-axis capped at 30 days -- the response itself is always much
   narrower than the full lag grid it's evaluated on).
 
+Every light-curve/psi panel (driver included) also shows 68%/95% credible
+envelopes, matching the shaded bands on the standard (non-animated)
+``plot_lightcurve_fits``, but computed cumulatively per frame -- frame i's
+envelope only uses samples up to i, not the full run -- so it starts wide
+(next to no constraint from 1-2 samples) and narrows towards the converged
+posterior's own width as the chain accumulates more of them; see
+``_expanding_percentiles``.
+
 Both disk panels are a genuinely simplified 2-D schematic, not a 3-D/
 raytraced render, and always use the viscous thin-disk profile for the
 picture regardless of which response function the fit itself used, since
@@ -64,6 +72,7 @@ from echofit.forward_model import (
     disk_temperature_profile, _schwarzschild_radius_light_days, lag_scaling,
 )
 from echofit.synthetic import generate_synthetic_dataset
+from echofit.plotting import wavelength_to_colour
 
 # Purely for the illustrative disk panels -- the fit itself may use bands
 # at other wavelengths; this just sets the pictures' colour/size scale.
@@ -81,11 +90,35 @@ def _draw_observer(ax, x, y, size):
         ax.add_patch(p)
 
 
+def _expanding_percentiles(samples):
+    """68%/95% credible-interval percentiles (plus the median) of
+    ``samples`` (shape ``(n_frames, ...)``), computed cumulatively: frame
+    ``i``'s percentiles use only ``samples[:i+1]``, not the full run. This
+    is what makes the envelope start wide (1-2 samples give almost no
+    constraint) and narrow towards the converged posterior's own width as
+    the animation progresses, mirroring the credible bands on the standard
+    (non-animated) light curve plots -- there computed once, over the
+    whole (converged) chain.
+
+    Returns
+    -------
+    array, shape (5, n_frames, ...)
+        The [2.5, 16, 50, 84, 97.5] percentiles, in that order, one set
+        per frame.
+    """
+    n_frames = samples.shape[0]
+    out = np.empty((5, n_frames) + samples.shape[1:])
+    for i in range(n_frames):
+        out[:, i] = np.percentile(samples[: i + 1], [2.5, 16, 50, 84, 97.5], axis=0)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--num-warmup", type=int, default=15, help="Deliberately short -- see module docstring.")
     parser.add_argument("--num-frames", type=int, default=150, help="Post-warmup samples to animate, one per frame.")
     parser.add_argument("--fps", type=int, default=15)
+    parser.add_argument("--dpi", type=int, default=150)
     parser.add_argument("--seed", type=int, default=3)
     parser.add_argument("--outdir", type=Path, default=Path("docs/images"))
     args = parser.parse_args()
@@ -128,6 +161,13 @@ def main():
         psi_by_band[name] = np.asarray(psi_all)
     driver_samples = np.asarray(jax.vmap(lambda S_s, C_s: driver_at(S_s, C_s, ef.freqs, t_fine))(S, C))
 
+    # Expanding-window 68%/95% credible envelopes -- wide early (few
+    # samples), narrowing towards the converged posterior's own width as
+    # the chain accumulates more of them. See _expanding_percentiles.
+    driver_pct = _expanding_percentiles(driver_samples)
+    echo_pct = {name: _expanding_percentiles(y_by_band[name]) for name in ef.bands}
+    psi_pct = {name: _expanding_percentiles(psi_by_band[name]) for name in ef.bands}
+
     # -- disk-panel geometry (fixed across frames; only colour/tilt vary) --
     r_in = 3.0 * float(_schwarzschild_radius_light_days(ef.M_BH))
     tau_ref_per_sample = np.asarray(lag_scaling(log_mdot, _DISK_REFERENCE_WAVELENGTH, ef.M_BH))
@@ -152,7 +192,7 @@ def main():
     ax_drv.set_ylim(driver_samples.min() - y_pad, driver_samples.max() + y_pad)
     ax_drv.set_ylabel("driver X(t)")
     ax_drv.set_title("Driving light curve", fontsize=9)
-    (driver_line,) = ax_drv.plot([], [], color="0.2", lw=1.5)
+    (driver_line,) = ax_drv.plot([], [], color="black", lw=1.5)
 
     # -- disk-temperature panel: fixed face-on geometry, colour-only updates --
     ax_disk_temp.set_xlim(-1.1 * r_out, 1.1 * r_out)
@@ -179,23 +219,26 @@ def main():
     ax_disk_tilt.plot(0.0, 0.0, "o", color="k", ms=4, zorder=4)
     (disk_line,) = ax_disk_tilt.plot([], [], "-", color="#b83227", lw=4, solid_capstyle="round", zorder=3)
 
-    band_lines, psi_lines = {}, {}
+    band_lines, psi_lines, band_axes, band_colours = {}, {}, {}, {}
     for row, (name, d) in enumerate(ef.bands.items(), start=1):
         ax_lc, ax_psi = axes[row, 0], axes[row, 1]
         axes[row, 2].axis("off")
+        colour = wavelength_to_colour(d["wavelength"])
+        band_axes[name] = (ax_lc, ax_psi)
+        band_colours[name] = colour
         ax_lc.errorbar(d["t"], d["y"], yerr=d["yerr"], fmt="o", ms=3, color="k", alpha=0.5, zorder=1)
         y = y_by_band[name]
         pad = 0.15 * (y.max() - y.min())
         ax_lc.set_ylim(min(y.min(), d["y"].min()) - pad, max(y.max(), d["y"].max()) + pad)
         ax_lc.set_ylabel(f"{name} ({d['wavelength']:.0f} Å)")
-        (band_lines[name],) = ax_lc.plot([], [], color="C0", lw=1.5, zorder=2)
+        (band_lines[name],) = ax_lc.plot([], [], color=colour, lw=1.5, zorder=2)
         ax_lc.sharex(ax_drv)
 
         psi = psi_by_band[name]
         ax_psi.set_ylim(0.0, 1.05 * psi.max())
         ax_psi.set_xlim(0.0, _PSI_XLIM_DAYS)
         ax_psi.set_ylabel(f"{name}\nψ(τ)")
-        (psi_lines[name],) = ax_psi.plot([], [], color="C3", lw=1.5)
+        (psi_lines[name],) = ax_psi.plot([], [], color=colour, lw=1.5)
         if row > 1:
             ax_psi.sharex(axes[1, 1])
 
@@ -205,12 +248,30 @@ def main():
     title = fig.suptitle("")
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
 
+    envelope_artists = []
+
     def update(i):
         driver_line.set_data(t_fine, driver_samples[i])
         for name in ef.bands:
             band_lines[name].set_data(t_fine, y_by_band[name][i])
             psi_lines[name].set_data(tau_grid_np, psi_by_band[name][i])
-        title.set_text(f"MCMC sample {i + 1}/{args.num_frames} -- model taking shape")
+        title.set_text(f"MCMC sample {i + 1}/{args.num_frames}")
+
+        # 68%/95% credible envelopes, expanding-window over samples seen so
+        # far (see _expanding_percentiles) -- fill_between has no in-place
+        # update, so these are removed and redrawn each frame.
+        for artist in envelope_artists:
+            artist.remove()
+        envelope_artists.clear()
+        envelope_artists.append(ax_drv.fill_between(t_fine, driver_pct[0, i], driver_pct[4, i], color="0.5", alpha=0.15, zorder=0))
+        envelope_artists.append(ax_drv.fill_between(t_fine, driver_pct[1, i], driver_pct[3, i], color="0.5", alpha=0.3, zorder=0))
+        for name in ef.bands:
+            ax_lc, ax_psi = band_axes[name]
+            colour = band_colours[name]
+            envelope_artists.append(ax_lc.fill_between(t_fine, echo_pct[name][0, i], echo_pct[name][4, i], color=colour, alpha=0.15, zorder=0))
+            envelope_artists.append(ax_lc.fill_between(t_fine, echo_pct[name][1, i], echo_pct[name][3, i], color=colour, alpha=0.3, zorder=0))
+            envelope_artists.append(ax_psi.fill_between(tau_grid_np, psi_pct[name][0, i], psi_pct[name][4, i], color=colour, alpha=0.15, zorder=0))
+            envelope_artists.append(ax_psi.fill_between(tau_grid_np, psi_pct[name][1, i], psi_pct[name][3, i], color=colour, alpha=0.3, zorder=0))
 
         disk_mesh.set_array(T_grid_all[i][:-1, :-1].ravel())
         disk_title.set_text(f"log_mdot = {log_mdot_np[i]:.2f}, inclination = {inclination_np[i]:.1f}°")
@@ -220,11 +281,11 @@ def main():
         disk_line.set_data([-dx, dx], [-dy, dy])
 
         return [driver_line, title, disk_mesh, disk_title, disk_line,
-                *band_lines.values(), *psi_lines.values()]
+                *band_lines.values(), *psi_lines.values(), *envelope_artists]
 
     ani = FuncAnimation(fig, update, frames=args.num_frames, blit=False)
     out_path = args.outdir / "fit_animation.gif"
-    ani.save(out_path, writer="pillow", fps=args.fps, dpi=80)
+    ani.save(out_path, writer="pillow", fps=args.fps, dpi=args.dpi)
     plt.close(fig)
 
     # Re-palette to shrink the file -- a full-colour GIF from matplotlib is

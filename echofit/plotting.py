@@ -22,6 +22,13 @@ Plotting entry points, matching the EchoFit API:
                                  ``2 * potential_energy``) per sample,
                                  coloured per chain -- should decrease then
                                  flatten as the chain converges.
+* ``wavelength_to_colour``    -- real-world-ish colour for a given
+                                 wavelength (X-ray black, UV violet, the
+                                 visible range its actual spectral colour,
+                                 IR+ reddish), used for every band's colour
+                                 in the plots above instead of an arbitrary
+                                 per-plot palette; also reused directly by
+                                 ``scripts/make_fit_animation.py``.
 
 All functions take plain numpy-able arrays / dicts so they have no
 dependency on JAX or NumPyro themselves.
@@ -35,13 +42,62 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+def _visible_wavelength_to_rgb(wavelength_nm: float):
+    """Approximate real-world colour of visible light at ``wavelength_nm``
+    (380-780 nm), via the standard piecewise-linear spectrum-to-RGB
+    approximation (as used e.g. in Dan Bruton's "colour science" reference
+    implementation) -- violet at the blue end, through green and yellow, to
+    red at the long end, with an intensity taper near the edges of vision.
+    """
+    w = wavelength_nm
+    if w < 440.0:
+        r, g, b = -(w - 440.0) / (440.0 - 380.0), 0.0, 1.0
+    elif w < 490.0:
+        r, g, b = 0.0, (w - 440.0) / (490.0 - 440.0), 1.0
+    elif w < 510.0:
+        r, g, b = 0.0, 1.0, -(w - 510.0) / (510.0 - 490.0)
+    elif w < 580.0:
+        r, g, b = (w - 510.0) / (580.0 - 510.0), 1.0, 0.0
+    elif w < 645.0:
+        r, g, b = 1.0, -(w - 645.0) / (645.0 - 580.0), 0.0
+    else:
+        r, g, b = 1.0, 0.0, 0.0
+
+    if w < 420.0:
+        factor = 0.3 + 0.7 * (w - 380.0) / (420.0 - 380.0)
+    elif w < 701.0:
+        factor = 1.0
+    else:
+        factor = 0.3 + 0.7 * (780.0 - w) / (780.0 - 700.0)
+    factor = np.clip(factor, 0.0, 1.0)
+
+    gamma = 0.8
+    adjust = lambda c: 0.0 if c <= 0.0 else (c * factor) ** gamma
+    return (adjust(r), adjust(g), adjust(b))
+
+
+def wavelength_to_colour(wavelength_angstrom: float):
+    """Real-world-ish colour for a light curve at ``wavelength_angstrom``,
+    rather than an arbitrary per-plot palette colour -- X-ray driving light
+    curves (< 100 A) black, UV (100-3800 A) a strong violet, the visible
+    range (3800-7500 A) its actual approximate spectral colour, and IR and
+    beyond (> 7500 A) a reddish colour, per the physical picture of the
+    lamppost model (a short-wavelength driver reprocessed into progressively
+    redder, more slowly varying bands further out in the disk)."""
+    if wavelength_angstrom < 100.0:
+        return "black"
+    if wavelength_angstrom < 3800.0:
+        return "darkviolet"
+    if wavelength_angstrom <= 7500.0:
+        return _visible_wavelength_to_rgb(wavelength_angstrom / 10.0)
+    return "firebrick"
+
+
 def _band_colours(bands: Dict[str, dict]):
-    """Consistent colour per band, ordered and coloured by wavelength."""
+    """Consistent, physically-motivated colour per band (see
+    ``wavelength_to_colour``), ordered by wavelength."""
     ordered = sorted(bands.items(), key=lambda kv: kv[1]["wavelength"])
-    wavelengths = np.array([d["wavelength"] for _, d in ordered])
-    norm = plt.Normalize(wavelengths.min(), wavelengths.max())
-    cmap = plt.get_cmap("plasma_r")
-    colours = {name: cmap(norm(d["wavelength"])) for name, d in ordered}
+    colours = {name: wavelength_to_colour(d["wavelength"]) for name, d in ordered}
     return ordered, colours
 
 
@@ -148,7 +204,7 @@ def plot_lightcurve_fits(
         lo95, lo68, med, hi68, hi95 = np.percentile(driver_samples, [2.5, 16, 50, 84, 97.5], axis=0)
         ax_drv.fill_between(t_fine, lo95, hi95, color="0.5", alpha=0.15)
         ax_drv.fill_between(t_fine, lo68, hi68, color="0.5", alpha=0.35)
-        ax_drv.plot(t_fine, med, color="0.2", lw=1.5)
+        ax_drv.plot(t_fine, med, color="black", lw=1.5)
         if driver_points is not None:
             t_d, X_d, yerr_d = driver_points
             ax_drv.errorbar(

@@ -16,6 +16,35 @@ import pytest
 from echofit import plotting
 
 
+def test_wavelength_to_colour_classifies_regimes_correctly():
+    assert plotting.wavelength_to_colour(10.0) == "black"  # X-ray
+    assert plotting.wavelength_to_colour(2000.0) == "darkviolet"  # UV
+    assert plotting.wavelength_to_colour(20000.0) == "firebrick"  # IR+
+    optical = plotting.wavelength_to_colour(5000.0)
+    assert optical not in ("black", "darkviolet", "firebrick")
+    assert isinstance(optical, tuple) and len(optical) == 3
+
+
+def test_wavelength_to_colour_visible_range_is_blue_to_red():
+    # Bluer (shorter) visible wavelengths should have a larger blue
+    # component than red; redder (longer) ones the reverse.
+    blue_ish = plotting.wavelength_to_colour(4200.0)
+    red_ish = plotting.wavelength_to_colour(7000.0)
+    assert blue_ish[2] > blue_ish[0]
+    assert red_ish[0] > red_ish[2]
+
+
+def test_band_colours_are_ordered_by_wavelength_and_use_wavelength_to_colour():
+    bands = {
+        "red_band": {"wavelength": 7000.0},
+        "blue_band": {"wavelength": 4200.0},
+    }
+    ordered, colours = plotting._band_colours(bands)
+    assert [name for name, _ in ordered] == ["blue_band", "red_band"]
+    assert colours["blue_band"] == plotting.wavelength_to_colour(4200.0)
+    assert colours["red_band"] == plotting.wavelength_to_colour(7000.0)
+
+
 def test_plot_corner_shows_true_value_crosshair_and_raises_on_unknown_param():
     rng = np.random.default_rng(0)
     samples = {
