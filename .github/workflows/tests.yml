@@ -1,9 +1,15 @@
 name: Tests
 
+# Automatic triggers (push/pull_request) are deliberately commented out for
+# now, to avoid spending GitHub Actions minutes -- re-enable by uncommenting
+# them when ready. workflow_dispatch keeps this runnable manually (Actions
+# tab -> Tests -> "Run workflow") in the meantime, and the job itself is
+# untouched, so re-enabling is a one-line change back.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # push:
+  #   branches: [main]
+  # pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
