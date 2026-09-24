@@ -451,17 +451,28 @@ and package layout.
     worth the most screen space) plus two disk panels, evolving sample by
     sample early in a deliberately short-warmup chain -- the same
     short-warmup chain whose driver amplitude swings motivated decision
-    #13 above. `disk_temperature_profile` factors out the axisymmetric
-    Shakura-Sunyaev `T(r)` calculation `thin_disk_response` already
-    computes internally (same formula, same Wien's-law reference point --
-    see `tests/test_thin_disk_response.py`'s
-    `test_disk_temperature_profile_matches_wien_law_at_the_reference_radius`)
-    so the animation (or any other caller wanting "temperature at radius
-    r" directly) doesn't have to duplicate that physics; deliberately
-    *not* refactored to share code with `thin_disk_response`'s own
-    2-D `(tau, phi)`-grid evaluation, to avoid any regression risk to that
-    already-validated function for a purely cosmetic reuse. Always uses
-    the viscous-only profile at a fixed illustrative reference wavelength
+    #13 above. `disk_temperature_profile` and `thin_disk_response`'s
+    viscous term now share the one actual formula, via `_viscous_t4_shape`
+    (same formula, same Wien's-law reference point -- see
+    `tests/test_thin_disk_response.py`'s
+    `test_disk_temperature_profile_matches_wien_law_at_the_reference_radius`).
+    Originally deliberately *not* shared, to avoid regression risk to the
+    already-validated `thin_disk_response` for what was then a purely
+    cosmetic reuse -- revisited and done anyway after a direct "best not to
+    have duplication of code" request, once there was a second real
+    consumer of the same physics (this decision, the animation) and the
+    existing `thin_disk_response` test suite (20 tests, all passing
+    unchanged after the refactor) to catch a regression if the shared
+    helper got it wrong. `_viscous_t4_shape` takes the two callers'
+    already-clipped radius and the constants they'd already computed
+    (`tau_ref`, `r_in`) rather than clipping internally, since the two
+    callers need genuinely different clipping strategies at `r <= r_in`
+    (`thin_disk_response`'s `r_star` depends on a sampled parameter and
+    needs a smooth cutoff -- handled separately via its own sigmoid mask,
+    same zero-gradient concern as decision #7; `disk_temperature_profile`
+    doesn't sample `r`, so a plain hard clip is fine there) -- the formula
+    is shared, the clipping decision deliberately isn't. Always uses the
+    viscous-only profile at a fixed illustrative reference wavelength
     (5000 Angstrom), regardless of which response function the fit itself
     used or what wavelengths its bands are at -- only the thin-disk
     response family has a literal disk geometry to show, and the picture
@@ -523,6 +534,19 @@ and package layout.
     that request rather than silently re-compressed back down, since
     colour-count reduction was checked and barely helps (96 to 64 colours
     saved well under 1MB) without visibly hurting the smooth gradients.
+
+    **Gridlines on every light-curve/psi/BOF panel (`alpha=0.6`, both here
+    and in `plotting.py`) after direct feedback that the charts "don't
+    have gridlines"** -- they technically did (`alpha=0.25`), but
+    `grid.color`'s default (`#b0b0b0`, already a light grey) at that alpha
+    on a white background turned out to be essentially invisible once
+    actually rendered, not just subtle; confirmed by rendering comparison
+    swatches at several alpha values before picking `0.6`. Also added a
+    sixth panel, Badness of Fit vs. sample (`2 * potential_energy`,
+    matching `plotting.plot_bof`) as a growing trace extending one point
+    per frame -- reuses `ef.extra_fields["potential_energy"]`, already
+    collected by every fit by default (decision #11), so no extra
+    computation, same as the standalone `plot_bof`.
 
 15. **`inclination` is sampled uniform in `cos(inclination)`, not
     `inclination` itself, and `EchoFit(fixed_params={...})` generalises
