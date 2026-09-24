@@ -69,6 +69,17 @@ class EchoFit:
         Override the output root directory. Only relevant when ``title``
         is given. Otherwise resolved from the ``ECHOFIT_OUTPUT_DIR``
         environment variable, or ``./outputs`` if that's unset too.
+    fixed_params : dict, optional
+        ``{site_name: value}`` to hold any of the model's scalar sites
+        (``sigma_drw``, ``tau_drw``, ``log_mdot``, ``inclination``,
+        ``S_driver``, ``C_driver``, ``S_{band}``, ``C_{band}``, or a
+        free-lag band's ``tau_{band}``) fixed instead of inferring it --
+        e.g. ``fixed_params={"inclination": 0.0}`` to assume a face-on
+        disk. The same mechanism as ``M_BH`` (always fixed, decision #3),
+        generalised to any parameter -- see ``model.py``'s "fixed-parameter"
+        docstring note. Validated against the actually-registered
+        bands/driver in ``.fit()`` (a key that could never be a real site
+        given the current setup raises, to catch typos).
 
     Examples
     --------
@@ -83,11 +94,20 @@ class EchoFit:
 
     >>> ef = EchoFit.resume("ngc_5548")
     >>> ef.fit()  # continues from the last checkpoint, same settings as before
+
+    Assume a face-on disk (fixed inclination) to make the remaining
+    parameters easier to solve for::
+
+    >>> ef = EchoFit(M_BH=1e8, fixed_params={"inclination": 0.0})
     """
 
-    def __init__(self, M_BH: Optional[float] = None, title: Optional[str] = None, output_dir: Optional[str] = None):
+    def __init__(
+        self, M_BH: Optional[float] = None, title: Optional[str] = None, output_dir: Optional[str] = None,
+        fixed_params: Optional[Dict[str, float]] = None,
+    ):
         self.M_BH = float(M_BH) if M_BH is not None else None
         self.title = title
+        self.fixed_params: Dict[str, float] = dict(fixed_params) if fixed_params else {}
         self.bands: Dict[str, dict] = {}
         self.driver_data: Optional[dict] = None
         self.freqs: Optional[np.ndarray] = None
@@ -228,6 +248,7 @@ class EchoFit:
             freqs=self.freqs, tau_grid=self.tau_grid, M_BH=self.M_BH,
             bands=bands_jax, driver=driver_jax,
             sigma_drw_prior_scale=self._sigma_drw_prior_scale(),
+            fixed_params=self.fixed_params,
         )
 
     def _sigma_drw_prior_scale(self) -> float:
@@ -253,6 +274,65 @@ class EchoFit:
             scale = max(float(np.std(d["y"])) for d in self.bands.values())
         return max(scale, 1e-3)
 
+    def _valid_fixed_param_names(self) -> set:
+        """Every scalar site ``fixed_params`` could actually pin, given the
+        bands/driver currently registered -- used to catch typos (a key
+        that could never be a real site) before spending time on a fit."""
+        valid = {"sigma_drw", "tau_drw"}
+        if self.driver_data is not None:
+            valid |= {"S_driver", "C_driver"}
+        if any(d["lag_mode"] == "physical" for d in self.bands.values()):
+            valid |= {"log_mdot", "inclination"}
+        for name, d in self.bands.items():
+            valid.add(f"S_{name}")
+            valid.add(f"C_{name}")
+            if d["lag_mode"] == "free":
+                valid.add(f"tau_{name}")
+        return valid
+
+    def _init_strategy(self, num_chains: int = 1):
+        """Data-anchored starting guesses for each band's ``S_{band}``/
+        ``C_{band}`` (NUTS's own initial point, not the prior) -- the same
+        idea as the author's PhD-era CREAM Fortran code's own
+        initialisation (``stretch = rms(data)/rms1``, ``offset =
+        med(data)``, see ``cream_f90.f90``), via NumPyro's
+        ``init_to_value``. Only covers non-fixed sites; ``init_to_value``
+        defers anything else (including any site ``fixed_params`` already
+        pins, which never reaches this dict) to NumPyro's own default
+        (``init_to_uniform``). ``C_band``'s guess is the band's own mean;
+        ``S_band``'s is its std relative to ``_sigma_drw_prior_scale``,
+        the same data-derived reference scale the driver's own amplitude
+        prior is anchored to (decision #13), so the two stay consistent
+        with each other.
+
+        ``num_chains > 1`` disables this entirely (returns ``None``, NumPyro's
+        own ``init_to_uniform`` default), on purpose: ``init_to_value`` gives
+        every chain the exact same starting point, which is fine (even
+        helpful) for a single chain but actively defeats multi-chain
+        Gelman-Rubin R-hat convergence checking -- confirmed directly, not
+        theoretically: with it applied to all 4 chains of
+        ``tests/test_free_lag_mode.py::test_free_lag_recovery_with_driver_anchor``'s
+        vectorized-chain recovery check, R-hat on the free-lag ``tau_{band}``
+        sites blew up to ~1000 (chains no longer independently initialised,
+        so genuinely landing in different modes stopped being visible as
+        "chains disagree" the way it needs to be); with ``num_chains=1``
+        (this method's default), R-hat was ~1.0 as expected. See CLAUDE.md's
+        rough-edges note on why independently-initialised chains matter for
+        this model's free-lag multimodality risk in the first place.
+        """
+        if num_chains != 1:
+            return None
+        from numpyro.infer import init_to_value
+
+        sigma_drw_scale = self._sigma_drw_prior_scale()
+        values = {}
+        for name, d in self.bands.items():
+            if f"C_{name}" not in self.fixed_params:
+                values[f"C_{name}"] = float(np.mean(d["y"]))
+            if f"S_{name}" not in self.fixed_params:
+                values[f"S_{name}"] = max(float(np.std(d["y"])) / sigma_drw_scale, 1e-3)
+        return init_to_value(values=values)
+
     def _validate_before_fit(self):
         has_physical = any(d["lag_mode"] == "physical" for d in self.bands.values())
         has_free = any(d["lag_mode"] == "free" for d in self.bands.values())
@@ -269,6 +349,13 @@ class EchoFit:
                 "free-lag band's tau, leaves the likelihood unchanged -- the "
                 "absolute lag origin (and hence each such band's tau) is not "
                 "identifiable without a driver light curve to anchor it."
+            )
+        unknown = set(self.fixed_params) - self._valid_fixed_param_names()
+        if unknown:
+            raise ValueError(
+                f"fixed_params has key(s) that aren't a real site given the "
+                f"currently registered bands/driver: {sorted(unknown)}. "
+                f"Valid names right now: {sorted(self._valid_fixed_param_names())}."
             )
 
     # ------------------------------------------------------------------
@@ -291,7 +378,10 @@ class EchoFit:
         run_dir = run_manager.find_run_dir(output_root, title, run_id)
         manifest = run_manager.load_json(run_dir / "manifest.json")
 
-        ef = cls(M_BH=manifest["M_BH"], title=title, output_dir=output_dir)
+        ef = cls(
+            M_BH=manifest["M_BH"], title=title, output_dir=output_dir,
+            fixed_params=manifest.get("fixed_params"),
+        )
         ef.run_dir = run_dir
         ef._fit_config = manifest["fit_config"]
 
@@ -386,6 +476,7 @@ class EchoFit:
                 reverberation_model, self._model_kwargs(), rng_key,
                 num_warmup=num_warmup, num_samples=num_samples, num_chains=num_chains,
                 max_tree_depth=max_tree_depth, chain_method=chain_method, progress_bar=progress_bar,
+                init_strategy=self._init_strategy(num_chains),
             )
             self.samples = self.mcmc.get_samples()
             self._samples_by_chain = self.mcmc.get_samples(group_by_chain=True)
@@ -450,6 +541,7 @@ class EchoFit:
                     title=self.title, M_BH=self.M_BH,
                     bands={n: d["wavelength"] for n, d in self.bands.items()},
                     fit_config=self._fit_config,
+                    fixed_params=self.fixed_params,
                 ))
 
         chunk_samples_so_far, chunk_extra_so_far = [], []
@@ -483,7 +575,7 @@ class EchoFit:
             num_warmup=num_warmup, num_samples=num_samples, checkpoint_every=checkpoint_every,
             max_tree_depth=max_tree_depth, progress_bar=progress_bar,
             init_last_state=init_last_state, n_already_done=n_already_done,
-            on_chunk_done=_on_chunk_done,
+            on_chunk_done=_on_chunk_done, init_strategy=self._init_strategy(),
         )
         fit_seconds = time.time() - t0
 

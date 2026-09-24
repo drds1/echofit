@@ -524,6 +524,50 @@ and package layout.
     colour-count reduction was checked and barely helps (96 to 64 colours
     saved well under 1MB) without visibly hurting the smooth gradients.
 
+15. **`inclination` is sampled uniform in `cos(inclination)`, not
+    `inclination` itself, and `EchoFit(fixed_params={...})` generalises
+    decision #3 ("`M_BH` is always fixed") to any scalar site.** Both
+    direct user requests, both in `model.py` -- see its "inclination note"
+    and "fixed-parameter note" docstring sections for the full mechanism
+    (`_param`: substitute a `numpyro.deterministic` constant for the
+    `numpyro.sample` call when a name is in `fixed_params`; `inclination`'s
+    non-fixed path samples `cos_inclination ~ Uniform(cos(80deg), 1)` and
+    derives `inclination = arccos(...)` as a deterministic). Two things
+    worth knowing that aren't obvious from the mechanism alone:
+
+    - **"Step in cos(i), uniform there" and "an explicit prior on
+      inclination" are the same thing, not two different options.**
+      Directly clarified with the user after they asked whether stepping
+      in cos-space could "mimic the effect of" a prior without one being
+      declared: it can't, and doesn't need to try to -- sampling
+      `cos_inclination` uniformly and setting `inclination =
+      arccos(cos_inclination)` *is*, via the transform's Jacobian, exactly
+      the standard isotropic-orientation prior `p(inclination) ∝
+      sin(inclination)`. There's no version of this that changes only how
+      NUTS steps without also changing the marginal prior on inclination.
+    - **`EchoFit._init_strategy()`** (data-anchored starting guesses for
+      each band's `S_{band}`/`C_{band}` -- `C_band` the band's own mean,
+      `S_band` its std relative to `_sigma_drw_prior_scale`, the same
+      CREAM-Fortran-inspired idea as decision #13's prior anchoring, via
+      `numpyro.infer.init_to_value`) **must stay disabled whenever
+      `num_chains != 1`.** Found the hard way, not anticipated in advance:
+      applying it unconditionally made
+      `tests/test_free_lag_mode.py::test_free_lag_recovery_with_driver_anchor`'s
+      4-chain R-hat check on the free-lag `tau_{band}` sites blow up to
+      ~1000 (down from ~1.0 with it disabled) -- `init_to_value` gives
+      *every* chain the identical starting point, which defeats the
+      independently-initialised-chains premise that whole R-hat-based
+      convergence-checking methodology depends on (see the "rough edges"
+      note below on why that independence matters for this model's
+      free-lag multimodality risk specifically). `_init_strategy(num_chains=1)`
+      is safe (and the checkpointed path is always single-chain regardless,
+      decision #6); anything else returns `None` (NumPyro's own
+      `init_to_uniform` default) so multi-chain fits keep genuinely
+      independent starts. `fixed_params` is persisted to/restored from
+      `manifest.json` across `EchoFit.resume()` -- forgetting this would
+      silently change the model structure (which sites get sampled at all)
+      partway through a checkpointed run's chunks.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model
