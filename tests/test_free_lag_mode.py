@@ -56,6 +56,7 @@ def test_free_band_with_driver_does_not_warn():
         ef.fit(num_warmup=5, num_samples=5, progress_bar=False)
 
 
+@pytest.mark.slow
 def test_free_lag_recovery_with_driver_anchor():
     """The real payoff: with a driver light curve registered, a multi-line
     free-lag fit should recover the true lags -- exactly what

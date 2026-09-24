@@ -51,6 +51,7 @@ def test_title_run_writes_expected_outputs(tmp_path):
     assert len(ef.samples["log_mdot"]) == 20
 
 
+@pytest.mark.slow
 def test_resume_continues_an_interrupted_fit(tmp_path, monkeypatch):
     data = _make_synthetic()
     ef = _build_echofit(data, title="resume_unit_test", output_dir=str(tmp_path))
@@ -106,6 +107,7 @@ def test_resume_continues_an_interrupted_fit(tmp_path, monkeypatch):
     )
 
 
+@pytest.mark.slow
 def test_report_every_refreshes_report_mid_fit(tmp_path, monkeypatch):
     """report_every should write report.html (and its PNGs) at least once
     before the fit finishes, not only at the very end -- checked by
@@ -139,6 +141,7 @@ def test_report_every_refreshes_report_mid_fit(tmp_path, monkeypatch):
     assert len(ef.samples["log_mdot"]) == 40
 
 
+@pytest.mark.slow
 def test_resume_of_already_complete_run_is_a_no_op(tmp_path):
     """Regression test: resuming a run that already reached its target
     sample count used to crash (run_mcmc_chunked indexed into an empty

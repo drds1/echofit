@@ -1,0 +1,28 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+        # Intentional, regenerated-on-purpose binary assets (see README's
+        # "Visual smoke test"/the animation section) -- not accidents.
+        exclude: ^(docs/images/fit_animation\.gif|smoke_test_output/.*)$
+
+# Deliberately no test-running hook here -- measured directly, not assumed:
+# even `pytest -m "not slow"` (skipping the handful of genuinely slow
+# multi-chain/full-recovery tests) takes ~10 minutes on this suite, since
+# almost every remaining test still fits a real (if small) NUTS chain and
+# each pays its own one-time JAX JIT-compilation cost. That's too slow to
+# block every local `git commit`, and marking enough tests `slow` to get
+# under a minute or two would leave "not slow" covering only a handful of
+# pure-unit tests -- not a meaningful "did I break the model" check. Tests
+# run automatically via CI instead (.github/workflows/tests.yml, every
+# push/PR, no marker filter), where a few extra minutes doesn't block
+# anyone's local workflow; run `poetry run pytest -m "not slow"` (or the
+# full suite) manually before pushing if you want that feedback sooner --
+# see README's "Tests and coverage".

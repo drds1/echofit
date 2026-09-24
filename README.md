@@ -43,6 +43,7 @@ Regenerate with `python scripts/make_fit_animation.py`.*
   - [🖥️ Command file for running real light curve campaigns](#-command-file-for-running-real-light-curve-campaigns)
   - [🐍 From Python directly](#-from-python-directly)
 - [🧪 Visual smoke test](#-visual-smoke-test)
+- [✅ Tests and coverage](#-tests-and-coverage)
 - [🔄 Swapping the response function](#-swapping-the-response-function)
 - [🌈 Emission-line / free-lag mode and driver light curves](#-emission-line--free-lag-mode-and-driver-light-curves)
 - [⚠️ Status / caveats](#-status--caveats)
@@ -498,6 +499,56 @@ real campaign than uniform random sampling.
 Writes PNGs and a `report.html` (open it to see everything in one page) to
 `smoke_test_output/`. This is a visual/eyeball check, not a pass/fail test;
 for that, see `tests/test_recovery.py`.
+
+## ✅ Tests and coverage
+
+```bash
+poetry run pytest                                          # full suite, ~15 min
+poetry run pytest -m "not slow"                             # skip the handful of
+                                                             # full/multi-chain MCMC
+                                                             # recovery tests, ~10 min
+poetry run pytest --cov=echofit --cov-report=term-missing   # + a coverage summary
+poetry run pytest --cov=echofit --cov-report=html           # + an HTML report,
+                                                             # open htmlcov/index.html
+```
+
+The full suite (fitting real, if small and short, NUTS chains throughout,
+not mocking the sampler) currently runs at ~90% line coverage. The `slow`
+marker (`pyproject.toml`) is on the handful of tests that fit longer
+chains, several chains at once, or a full checkpoint/resume cycle --
+`tests/test_free_lag_mode.py::test_free_lag_recovery_with_driver_anchor`
+alone (a genuine 4-chain Gelman-Rubin convergence check, see its
+docstring) is a large fraction of the full suite's runtime by itself. Even
+skipping those, `-m "not slow"` still takes ~10 minutes: almost every
+other test fits a real (if small) NUTS chain too, and each one pays its
+own one-time JAX JIT-compilation cost -- there isn't a large "genuinely
+fast" subset available without cutting down to only the handful of
+pure-unit (no-fit) tests. Coverage is weakest in `run_manager.py` and
+`synthetic.py`'s less-common code paths (default arguments, observing-gap
+handling, resume edge cases) -- add tests there first if you're looking
+for where coverage would help most; `tests/test_validation_and_utils.py`
+already covers a first pass of these found via exactly this coverage
+report, including one real bug it caught (`grid_utils.estimate_dt_min`'s
+"no usable gaps" fallback used to be unreachable dead code -- see
+CLAUDE.md).
+
+**Pre-commit hooks** (`.pre-commit-config.yaml`) run basic file hygiene
+before every commit (trailing whitespace, large-file checks, valid
+YAML/TOML) -- deliberately *not* the test suite, given the ~10 minute
+floor above is too slow to block every local `git commit`. One-time setup:
+
+```bash
+poetry run pre-commit install
+```
+
+After that, `git commit` runs them automatically; `git commit --no-verify`
+skips them for a single commit if you need to (e.g. a WIP commit on a
+branch nobody else is using yet).
+
+**CI** (`.github/workflows/tests.yml`, GitHub Actions) runs the *full*
+suite with coverage on every push to `main` and every pull request --
+this, not a local hook, is where tests actually run automatically, since
+it's the place the slow tests actually get run automatically.
 
 ## 🔄 Swapping the response function
 

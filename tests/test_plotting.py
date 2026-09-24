@@ -164,6 +164,7 @@ def test_echofit_plot_bof_raises_without_potential_energy():
         ef.plot_bof()
 
 
+@pytest.mark.slow
 def test_report_includes_disk_and_band_corners_but_not_free_lag_for_physical_fit(tmp_path):
     from echofit import reporting
 
