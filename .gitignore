@@ -217,3 +217,7 @@ __marimo__/
 # EchoFit(title=...) run outputs (default location; see run_manager.py)
 outputs/
 notebooks/demo_outputs/
+
+# scripts/make_example_data.py / scripts/run_example_fit.sh output
+example_data/
+diagnostic_run/

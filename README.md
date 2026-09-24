@@ -289,9 +289,28 @@ See `notebooks/demo.ipynb` for the full walkthrough.
 
 ## Fitting your own light curves, with saved/resumable runs
 
-Pass `title=` (e.g. an AGN name) to have `EchoFit` manage on-disk outputs
-for the run -- data, config, periodic checkpoints, the final posterior, and
-the same visual report as the smoke test:
+**From the terminal, with no Python required:** `scripts/fit_lightcurves.py`
+wraps everything below as a command-line tool, reading each band's light
+curve from a plain `t y yerr` text file:
+
+```bash
+python scripts/fit_lightcurves.py \
+    --title ngc_5548 --m-bh 1e8 \
+    --band g 4770 data/g_band.txt --band i 7625 data/i_band.txt \
+    --num-warmup 1000 --num-samples 2000 --checkpoint-every 200
+```
+
+See `python scripts/fit_lightcurves.py --help` for the full argument list
+(free-lag bands, a driver light curve, `--num-chains`/`--chain-method`,
+`--report-every`, `--output-dir`, ...), and `scripts/run_example_fit.sh` for
+a complete, runnable, heavily-commented example (including generating
+example data via `scripts/make_example_data.py` first) -- copy/adapt it as
+a starting command file.
+
+**From Python directly:** pass `title=` (e.g. an AGN name) to have
+`EchoFit` manage on-disk outputs for the run -- data, config, periodic
+checkpoints, the final posterior, and the same visual report as the smoke
+test:
 
 ```python
 ef = EchoFit(M_BH=1e8, title="ngc_5548")
