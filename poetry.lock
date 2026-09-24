@@ -5035,9 +5035,9 @@ numba = ["numba (>=0.55)"]
 test = ["hypothesis", "packaging", "preliz (>=0.19)", "pytest", "pytest-cov", "scipy (>=1.15)"]
 
 [extras]
-dev = ["ipykernel", "jupyter", "pytest"]
+dev = ["Pillow", "ipykernel", "jupyter", "pytest"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10"
-content-hash = "7f0d252967d2e4565dce64e22bda1b40a3f5d5ac173f67f464ca7cc257e725ec"
+content-hash = "c2595743f7002052325f24c7ad47e363c436f2e3ad49fd488d0f9405e67dd835"

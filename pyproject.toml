@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "jupyter", "ipykernel"]
+dev = ["pytest>=7.0", "jupyter", "ipykernel", "Pillow"]
 
 [project.urls]
 Homepage = "https://github.com/drds1/echofit"

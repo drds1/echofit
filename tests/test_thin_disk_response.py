@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from echofit.forward_model import thin_disk_response
+from echofit.forward_model import thin_disk_response, disk_temperature_profile, lag_scaling, _schwarzschild_radius_light_days, _WIEN_B_ANGSTROM_KELVIN
 from echofit.responses import available_responses, get_response, register_response
 
 _np_trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
@@ -181,3 +181,38 @@ def test_thin_disk_response_is_usable_via_the_existing_swap_mechanism():
         ef.fit(rng_seed=0, num_warmup=10, num_samples=10, progress_bar=False)
     finally:
         model_mod.response_function = original
+
+
+def test_disk_temperature_profile_matches_wien_law_at_the_reference_radius():
+    """T(tau_ref) should equal the Wien's-law reference temperature exactly
+    -- this is the same anchor point thin_disk_response's own internal
+    computation uses to set its absolute temperature scale."""
+    M_BH, wavelength, log_mdot = 1e8, 5000.0, 0.0
+    tau_ref = lag_scaling(log_mdot, wavelength, M_BH)
+    T = float(disk_temperature_profile(tau_ref, log_mdot, wavelength, M_BH))
+    assert T == pytest.approx(_WIEN_B_ANGSTROM_KELVIN / wavelength, rel=1e-5)
+
+
+def test_disk_temperature_profile_vanishes_at_the_isco():
+    """No viscous dissipation right at the inner boundary -- the standard
+    Shakura-Sunyaev condition, T(r_in) = 0 (down to the function's own
+    numerical floor). Checked relative to the temperature well clear of
+    the ISCO, rather than an absolute Kelvin value, since the floor itself
+    scales with the Wien-law reference temperature (M_BH/wavelength
+    dependent)."""
+    M_BH, wavelength, log_mdot = 1e8, 5000.0, 0.0
+    r_in = 3.0 * _schwarzschild_radius_light_days(M_BH)
+    T_at_isco = float(disk_temperature_profile(r_in, log_mdot, wavelength, M_BH))
+    T_away = float(disk_temperature_profile(10.0 * r_in, log_mdot, wavelength, M_BH))
+    assert T_at_isco < 1e-2 * T_away
+
+
+def test_disk_temperature_profile_declines_far_from_the_isco():
+    """Away from the inner-boundary region (where the profile genuinely
+    peaks just outside the ISCO before declining -- not monotonic from
+    r_in itself), temperature should fall off smoothly with radius."""
+    M_BH, wavelength, log_mdot = 1e8, 5000.0, 0.0
+    r_in = 3.0 * _schwarzschild_radius_light_days(M_BH)
+    r = np.geomspace(50.0 * r_in, 50.0, 20)  # well clear of the near-ISCO peak
+    T = np.asarray(disk_temperature_profile(r, log_mdot, wavelength, M_BH))
+    assert np.all(np.diff(T) < 0.0)
