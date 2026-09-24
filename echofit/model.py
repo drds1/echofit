@@ -57,6 +57,32 @@ mechanism, as the author's PhD-era CREAM Fortran code's optional Gaussian
 prior on its power-spectrum normalisation `P0` (`cream_f90.f90`'s `bof4`,
 gated by `sigp0square`/`siglogp0`), which plays the same role as
 `sigma_drw` here.
+
+Inclination note: `inclination` is sampled as `cos_inclination ~
+Uniform(cos(INCLINATION_MAX_DEG), 1)`, not `inclination ~
+Uniform(0, INCLINATION_MAX_DEG)` directly, with `inclination` itself a
+`numpyro.deterministic` transform (`arccos`) of it. This is the standard
+"isotropic orientation" prior: solid angle `dOmega = sin(i) di dphi`
+integrates to a flat density in `cos(i)`, not in `i` itself -- a uniform
+prior in `i` directly over-weights edge-on orientations relative to a
+population with no preferred axis. `inclination` (in degrees) remains the
+name every other function reads (plotting, `response_function`, the disk
+visualisation) -- only the sampling parameterisation changed, not the
+site's public meaning.
+
+Fixed-parameter note: `fixed_params` (`EchoFit(fixed_params={...})`) lets
+any of this model's scalar sites (`sigma_drw`, `tau_drw`, `log_mdot`,
+`inclination`, `S_driver`, `C_driver`, `S_{band}`, `C_{band}`, and
+free-lag bands' `tau_{band}`) be held at a known value instead of
+inferred, e.g. `fixed_params={"inclination": 0.0}` to assume a face-on
+disk while fitting everything else. This generalises decision #3's
+"`M_BH` is always fixed" to any parameter a caller already knows or wants
+to hold fixed for a particular fit, via the same mechanism throughout
+(`_param`: substitute a `numpyro.deterministic` constant for the
+`numpyro.sample` call) rather than a bespoke flag per parameter. A fixed
+`inclination` bypasses the `cos_inclination` reparameterisation above
+entirely -- the fixed value is used directly, in degrees, matching how
+every other caller of `inclination` already expects it.
 """
 
 from __future__ import annotations
@@ -68,6 +94,8 @@ import numpyro
 import numpyro.distributions as dist
 
 from .forward_model import response_function, tophat_response_free, transfer_coeffs, compute_echo, driver_at
+
+INCLINATION_MAX_DEG = 80.0
 
 
 def drw_prior_scale(freqs: jnp.ndarray, sigma_drw, tau_drw) -> jnp.ndarray:
@@ -98,6 +126,7 @@ def reverberation_model(
     bands: Dict[str, dict],
     driver: Optional[dict] = None,
     sigma_drw_prior_scale: float = 2.0,
+    fixed_params: Optional[Dict[str, float]] = None,
 ):
     """NumPyro model for multi-band reverberation-mapped light curves.
 
@@ -130,10 +159,23 @@ def reverberation_model(
         constant -- see the module docstring's "driver amplitude" note for
         why. Defaults to the old fixed value only for direct/standalone
         calls to this function.
+    fixed_params : dict, optional
+        ``{site_name: value}`` for any scalar site this model would
+        otherwise sample -- see the module docstring's "fixed-parameter"
+        note. Unrecognised keys are silently unused (``EchoFit`` validates
+        them against the actual registered bands/driver before fitting).
     """
+    fixed_params = fixed_params or {}
+
+    def _param(name, dist_obj):
+        """Sample ``name``, unless ``fixed_params`` pins it to a constant."""
+        if name in fixed_params:
+            return numpyro.deterministic(name, jnp.asarray(fixed_params[name], dtype=jnp.float32))
+        return numpyro.sample(name, dist_obj)
+
     # -- shared driving-source (DRW) hyperparameters --------------------
-    sigma_drw = numpyro.sample("sigma_drw", dist.HalfNormal(sigma_drw_prior_scale))
-    tau_drw = numpyro.sample("tau_drw", dist.LogNormal(loc=jnp.log(20.0), scale=1.0))
+    sigma_drw = _param("sigma_drw", dist.HalfNormal(sigma_drw_prior_scale))
+    tau_drw = _param("tau_drw", dist.LogNormal(loc=jnp.log(20.0), scale=1.0))
 
     prior_scale = drw_prior_scale(freqs, sigma_drw, tau_drw)
     n_freq = freqs.shape[0]
@@ -153,16 +195,26 @@ def reverberation_model(
 
     # -- driver light curve: a direct, zero-lag anchor on X(t) itself ----
     if driver is not None:
-        S_driver = numpyro.sample("S_driver", dist.LogNormal(0.0, 1.0))
-        C_driver = numpyro.sample("C_driver", dist.Normal(0.0, 5.0))
+        S_driver = _param("S_driver", dist.LogNormal(0.0, 1.0))
+        C_driver = _param("C_driver", dist.Normal(0.0, 5.0))
         y_pred_driver = S_driver * driver_at(S, C, freqs, driver["t"]) + C_driver
         numpyro.deterministic("y_pred_driver", y_pred_driver)
         numpyro.sample("obs_driver", dist.Normal(y_pred_driver, driver["yerr"]), obs=driver["y"])
 
     # -- shared physical reprocessing parameters (physical-mode bands only) --
     if any(d["lag_mode"] == "physical" for d in bands.values()):
-        log_mdot = numpyro.sample("log_mdot", dist.Normal(0.0, 1.0))
-        inclination = numpyro.sample("inclination", dist.Uniform(0.0, 80.0))
+        log_mdot = _param("log_mdot", dist.Normal(0.0, 1.0))
+        if "inclination" in fixed_params:
+            inclination = numpyro.deterministic(
+                "inclination", jnp.asarray(fixed_params["inclination"], dtype=jnp.float32)
+            )
+        else:
+            # Uniform in cos(inclination), not inclination itself -- see the
+            # module docstring's "inclination note". inclination stays the
+            # public (degrees) site every other function reads.
+            cos_incl_min = jnp.cos(jnp.deg2rad(INCLINATION_MAX_DEG))
+            cos_inclination = numpyro.sample("cos_inclination", dist.Uniform(cos_incl_min, 1.0))
+            inclination = numpyro.deterministic("inclination", jnp.rad2deg(jnp.arccos(cos_inclination)))
 
     # tau_grid[-1], not float(...): under NUTS's internal while_loop tracing
     # tau_grid can be an abstract tracer, and dist.Uniform accepts a JAX
@@ -171,8 +223,8 @@ def reverberation_model(
 
     # -- per-band amplitude / offset + likelihood ------------------------
     for band_name, d in bands.items():
-        S_band = numpyro.sample(f"S_{band_name}", dist.LogNormal(0.0, 1.0))
-        C_band = numpyro.sample(f"C_{band_name}", dist.Normal(0.0, 5.0))
+        S_band = _param(f"S_{band_name}", dist.LogNormal(0.0, 1.0))
+        C_band = _param(f"C_{band_name}", dist.Normal(0.0, 5.0))
 
         if d["lag_mode"] == "physical":
             psi = response_function(
@@ -183,7 +235,7 @@ def reverberation_model(
                 M_BH=M_BH,
             )
         else:
-            tau_band = numpyro.sample(f"tau_{band_name}", dist.Uniform(0.0, tau_max))
+            tau_band = _param(f"tau_{band_name}", dist.Uniform(0.0, tau_max))
             psi = tophat_response_free(tau_grid, tau_mean=tau_band)
 
         A, B = transfer_coeffs(tau_grid, psi, freqs)

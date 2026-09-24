@@ -14,10 +14,12 @@ import jax
 from numpyro.infer import MCMC, NUTS
 
 
-def _build_kernel(model: Callable, target_accept_prob: float, max_tree_depth: Optional[int]):
+def _build_kernel(model: Callable, target_accept_prob: float, max_tree_depth: Optional[int], init_strategy=None):
     nuts_kwargs = dict(target_accept_prob=target_accept_prob)
     if max_tree_depth is not None:
         nuts_kwargs["max_tree_depth"] = max_tree_depth
+    if init_strategy is not None:
+        nuts_kwargs["init_strategy"] = init_strategy
     return NUTS(model, **nuts_kwargs)
 
 
@@ -32,6 +34,7 @@ def run_mcmc(
     max_tree_depth: Optional[int] = None,
     chain_method: str = "parallel",
     progress_bar: bool = True,
+    init_strategy=None,
 ) -> MCMC:
     """Run NUTS on ``model(**model_kwargs)`` and return the fitted MCMC object.
 
@@ -63,6 +66,11 @@ def run_mcmc(
         by fixed per-call overhead rather than compute), or ``"sequential"``.
     progress_bar : bool
         Whether to show NumPyro's sampling progress bar.
+    init_strategy : callable, optional
+        NumPyro init strategy, e.g. ``numpyro.infer.init_to_value(values={...})``
+        for data-anchored starting guesses (``EchoFit`` uses this for each
+        band's ``S_{band}``/``C_{band}``, see ``EchoFit._init_strategy``).
+        Left as NumPyro's own default (``init_to_uniform``) when not given.
 
     Returns
     -------
@@ -72,7 +80,7 @@ def run_mcmc(
         Badness-of-Fit trace (``plotting.plot_bof``), and
         ``mcmc.print_summary()`` / ``arviz`` for diagnostics.
     """
-    kernel = _build_kernel(model, target_accept_prob, max_tree_depth)
+    kernel = _build_kernel(model, target_accept_prob, max_tree_depth, init_strategy)
     mcmc = MCMC(
         kernel,
         num_warmup=num_warmup,
@@ -101,6 +109,7 @@ def run_mcmc_chunked(
     init_last_state=None,
     n_already_done: int = 0,
     on_chunk_done: Optional[Callable] = None,
+    init_strategy=None,
 ):
     """Run NUTS in checkpointable chunks of up to ``checkpoint_every`` samples
     each, single chain only. Resumes from ``init_last_state`` (a previous
@@ -136,7 +145,7 @@ def run_mcmc_chunked(
 
     while n_done < num_samples:
         this_chunk = min(checkpoint_every, num_samples - n_done)
-        kernel = _build_kernel(model, target_accept_prob, max_tree_depth)
+        kernel = _build_kernel(model, target_accept_prob, max_tree_depth, init_strategy)
         mcmc = MCMC(
             kernel,
             num_warmup=0 if last_state is not None else num_warmup,

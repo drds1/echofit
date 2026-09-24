@@ -39,6 +39,8 @@ way). Regenerate with `python scripts/make_fit_animation.py`.*
   - [▶️ 4. Run things with `poetry run`](#-4-run-things-with-poetry-run)
 - [🚀 Quickstart](#-quickstart)
 - [📈 Fitting your own light curves, with saved/resumable runs](#-fitting-your-own-light-curves-with-savedresumable-runs)
+  - [🖥️ Command file for running real light curve campaigns](#-command-file-for-running-real-light-curve-campaigns)
+  - [🐍 From Python directly](#-from-python-directly)
 - [🧪 Visual smoke test](#-visual-smoke-test)
 - [🔄 Swapping the response function](#-swapping-the-response-function)
 - [🌈 Emission-line / free-lag mode and driver light curves](#-emission-line--free-lag-mode-and-driver-light-curves)
@@ -134,7 +136,10 @@ y_band(t) = S_band * ∫ X(t - τ) ψ(τ, λ_band, θ) dτ + C_band + ε
 
   with `M_BH` **fixed** (not inferred) and `log_mdot` (mass accretion rate)
   inferred. Inclination controls only the *skewness* of the response, never
-  the mean lag.
+  the mean lag. `inclination` is sampled uniform in `cos(inclination)`, not
+  in `inclination` itself -- the standard "isotropic orientation" prior
+  (`dOmega = sin(i) di dphi` is flat in `cos(i)`; uniform in `i` directly
+  over-weights edge-on orientations).
 - **Convolution**: because the driver is exactly a Fourier series, the
   convolution `∫ ψ(τ) X(t-τ) dτ` has a closed form in terms of the response
   function's own Fourier transform, evaluated once per driver frequency
@@ -145,6 +150,20 @@ y_band(t) = S_band * ∫ X(t - τ) ψ(τ, λ_band, θ) dτ + C_band + ε
 Only these are inferred: `log_mdot`, `inclination`, `sigma_drw`, `tau_drw`,
 the driver Fourier coefficients `{S_k, C_k}`, and per-band `{S_band, C_band}`.
 **`M_BH` is always a fixed input.**
+
+**Any of those (except `M_BH`, always fixed) can be fixed too**, via
+`EchoFit(fixed_params={...})`, e.g. to assume a face-on disk and make the
+remaining parameters easier to solve for:
+
+```python
+ef = EchoFit(M_BH=1e8, fixed_params={"inclination": 0.0})
+```
+
+Works the same way for free-lag bands' `tau_{band}` (see "Emission-line /
+free-lag mode" below) if you already know a line's lag and want to hold it
+fixed while fitting everything else. A key that couldn't be a real site
+given the bands/driver actually registered raises at `.fit()` time, to
+catch typos rather than silently doing nothing.
 
 ## 📦 Package layout
 
@@ -338,28 +357,11 @@ See `notebooks/demo.ipynb` for the full walkthrough.
 
 ## 📈 Fitting your own light curves, with saved/resumable runs
 
-**From the terminal, with no Python required:** `scripts/fit_lightcurves.py`
-wraps everything below as a command-line tool, reading each band's light
-curve from a plain text file, three columns `t y yerr` (whitespace- or
-comma-separated, one observation per line, `#`-prefixed lines ignored --
-time in days, on a consistent zero-point across every band):
+### 🖥️ Command file for running real light curve campaigns
 
-```bash
-python scripts/fit_lightcurves.py \
-    --title ngc_5548 --m-bh 1e8 \
-    --band g 4770 data/g_band.txt --band i 7625 data/i_band.txt \
-    --num-warmup 1000 --num-samples 2000 --checkpoint-every 200
-```
-
-`--band NAME WAVELENGTH PATH` is repeatable (one per band); the full
-argument list also covers `--free-lag-band`/`--driver` (see "Emission-line
-/ free-lag mode" below), `--num-chains`/`--chain-method`/`--max-tree-depth`,
-`--report-every`, `--output-dir`, `--n-freq`/`--n-tau`/`--tau-max`, and
-`--resume` -- run `python scripts/fit_lightcurves.py --help` for all of it.
-
-**`scripts/run_example_fit.sh` is a complete, runnable command file** built
-on that CLI -- a template to copy and adapt for a real campaign rather than
-writing one from scratch. Run it directly:
+**`scripts/run_example_fit.sh` is a complete, runnable command file** --
+copy and adapt it for a real campaign rather than writing one from scratch.
+Run it directly:
 
 ```bash
 ./scripts/run_example_fit.sh
@@ -384,10 +386,31 @@ invocation you can copy out individually:
 Each step prints where its `report.html` landed; open it in a browser to
 see the fit.
 
-**From Python directly:** pass `title=` (e.g. an AGN name) to have
-`EchoFit` manage on-disk outputs for the run -- data, config, periodic
-checkpoints, the final posterior, and the same visual report as the smoke
-test:
+That command file is built on `scripts/fit_lightcurves.py`, a standalone
+command-line tool wrapping everything below -- no Python required, reading
+each band's light curve from a plain text file, three columns `t y yerr`
+(whitespace- or comma-separated, one observation per line, `#`-prefixed
+lines ignored -- time in days, on a consistent zero-point across every
+band):
+
+```bash
+python scripts/fit_lightcurves.py \
+    --title ngc_5548 --m-bh 1e8 \
+    --band g 4770 data/g_band.txt --band i 7625 data/i_band.txt \
+    --num-warmup 1000 --num-samples 2000 --checkpoint-every 200
+```
+
+`--band NAME WAVELENGTH PATH` is repeatable (one per band); the full
+argument list also covers `--free-lag-band`/`--driver` (see "Emission-line
+/ free-lag mode" below), `--num-chains`/`--chain-method`/`--max-tree-depth`,
+`--report-every`, `--output-dir`, `--n-freq`/`--n-tau`/`--tau-max`, and
+`--resume` -- run `python scripts/fit_lightcurves.py --help` for all of it.
+
+### 🐍 From Python directly
+
+Pass `title=` (e.g. an AGN name) to have `EchoFit` manage on-disk outputs
+for the run -- data, config, periodic checkpoints, the final posterior, and
+the same visual report as the smoke test:
 
 ```python
 ef = EchoFit(M_BH=1e8, title="ngc_5548")
