@@ -67,8 +67,10 @@ def run_mcmc(
     Returns
     -------
     mcmc : numpyro.infer.MCMC
-        Fitted MCMC object; use ``mcmc.get_samples()`` for posterior draws
-        and ``mcmc.print_summary()`` / ``arviz`` for diagnostics.
+        Fitted MCMC object; use ``mcmc.get_samples()`` for posterior draws,
+        ``mcmc.get_extra_fields()["potential_energy"]`` for the
+        Badness-of-Fit trace (``plotting.plot_bof``), and
+        ``mcmc.print_summary()`` / ``arviz`` for diagnostics.
     """
     kernel = _build_kernel(model, target_accept_prob, max_tree_depth)
     mcmc = MCMC(
@@ -79,7 +81,10 @@ def run_mcmc(
         chain_method=chain_method,
         progress_bar=progress_bar,
     )
-    mcmc.run(rng_key, **model_kwargs)
+    # potential_energy (NUTS's own -log joint density) is what
+    # plotting.plot_bof shows as the Badness-of-Fit trace -- not requested
+    # by default (NumPyro only returns "diverging" unless asked).
+    mcmc.run(rng_key, extra_fields=("potential_energy",), **model_kwargs)
     return mcmc
 
 
@@ -141,9 +146,9 @@ def run_mcmc_chunked(
         )
         if last_state is not None:
             mcmc.post_warmup_state = last_state
-            mcmc.run(last_state.rng_key, **model_kwargs)
+            mcmc.run(last_state.rng_key, extra_fields=("potential_energy",), **model_kwargs)
         else:
-            mcmc.run(rng_key, **model_kwargs)
+            mcmc.run(rng_key, extra_fields=("potential_energy",), **model_kwargs)
 
         samples_chunks.append(mcmc.get_samples())
         samples_by_chain_chunks.append(mcmc.get_samples(group_by_chain=True))

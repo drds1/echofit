@@ -263,6 +263,7 @@ ef.plot_corner()              # log_mdot / inclination, coloured per chain
 ef.plot_corner_bands()        # S_band / C_band (offset/stretch) for every band
 ef.plot_corner_free_lag()     # tau_band, only if any band used lag_mode="free"
 ef.plot_fourier_correlation() # driver Fourier coefficient correlation heatmap
+ef.plot_bof()                 # Badness-of-Fit (2 x potential energy) vs. sample, one line per chain
 ```
 
 `plot_corner`/`plot_corner_bands`/`plot_corner_free_lag` are pairwise
@@ -273,9 +274,16 @@ the scalable stand-in for a corner plot on the driver's Fourier
 coefficients (`S`/`C`), which are one vector-valued site each rather than
 individually-named scalars and often number in the tens -- a correlation
 heatmap answers the same "is the posterior geometry sane" question a
-corner plot would, without needing `n_freq` scatter panels. All four are
-included automatically in `report.html` (see below), the disk-parameter
-and free-lag ones only when the fit actually has those parameters.
+corner plot would, without needing `n_freq` scatter panels. `plot_bof`
+tracks Starkey, Horne & Villforth (2016) eq. 12's Badness-of-Fit, which
+turns out to be exactly `2 x potential_energy` (NUTS's own `-log(likelihood
+x prior)`, already computed on every step) up to an additive constant, so
+it costs nothing extra to expose -- a chain that's still trending down at
+the end of a run hasn't finished burning in. All five are included
+automatically in `report.html` (see below); the disk-parameter and
+free-lag corners only when the fit actually has those parameters, and the
+BOF plot only when `extra_fields` has `potential_energy` (missing only for
+a checkpoint resumed from before this feature existed).
 
 See `notebooks/demo.ipynb` for the full walkthrough.
 
@@ -304,8 +312,24 @@ chains.npz               final posterior samples (plain numpy, no extra deps)
 chains.nc                same, as an ArviZ InferenceData (best-effort --
                           skipped with a warning if no netCDF backend is
                           available)
-report.html + *.png      the same visual report as scripts/smoke_test.py
+report.html + *.png      the same visual report as scripts/smoke_test.py,
+                          including bof.png (Badness-of-Fit vs. sample)
 ```
+
+Pass `report_every=` to refresh `report.html` (and its PNGs) partway through
+a long fit, instead of only once at the end -- useful for watching a
+long-running checkpointed fit converge from another terminal:
+
+```python
+ef.fit(num_warmup=1000, num_samples=5000, checkpoint_every=200, report_every=1000)
+# report.html refreshes every 1000 new samples, in addition to the final write
+```
+
+`report_every` only applies to the checkpointed (`title=`) path, and is off
+by default -- re-rendering the full plot set (corner plots,
+posterior-predictive fits, ...) on every checkpoint would add real overhead
+for a short `checkpoint_every`. The final report is always written
+regardless of this setting.
 
 **If a fit is interrupted** (killed, crashed, machine restarted), resume it
 in a new process with:

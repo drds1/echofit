@@ -1,0 +1,71 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>echofit report</title>
+<style>
+body { font-family: -apple-system, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+img { max-width: 100%; display: block; margin: 1rem 0; border: 1px solid #ddd; }
+table { border-collapse: collapse; margin: 1rem 0; }
+td, th { border: 1px solid #ddd; padding: 4px 10px; text-align: left; }
+code { background: #f2f2f2; padding: 1px 4px; }
+</style></head>
+<body>
+<h1>echofit report</h1>
+<p>fit wall time: <b>49.6s</b> &nbsp;|&nbsp; divergent transitions: <b>0/300</b></p>
+
+<h2>Posterior summary</h2>
+<table><tr><th>parameter</th><th>posterior mean</th><th>posterior std</th><th>truth</th></tr><tr><td>C_g</td><td>0.1186</td><td>0.01084</td><td>0.1052</td></tr><tr><td>C_i</td><td>-0.3106</td><td>0.006021</td><td>-0.3042</td></tr><tr><td>S_g</td><td>1.076</td><td>0.7666</td><td>1.482</td></tr><tr><td>S_i</td><td>0.6463</td><td>0.4615</td><td>0.8782</td></tr><tr><td>inclination</td><td>36.45</td><td>22.38</td><td>35</td></tr><tr><td>log_mdot</td><td>-0.1214</td><td>0.06927</td><td>0</td></tr><tr><td>sigma_drw</td><td>0.9358</td><td>0.6546</td><td>0.3</td></tr><tr><td>tau_drw</td><td>58.28</td><td>64.97</td><td>30</td></tr></table>
+
+<h2>Raw light curves</h2>
+<img src="raw_lightcurves.png">
+
+<h2>Posterior-predictive fit + response function</h2>
+<p>Shaded bands are 68%/95% credible intervals; black points are the data. The
+top panel is the inferred driving light curve (time-aligned with the bands
+below it), extended a bit before/after the data -- the credible band should
+widen roughly like t^(1/2) outside the data before saturating, since the
+driver is a DRW. The right-hand panels are the inferred response function
+&psi;(&tau;) per band.</p>
+<img src="lightcurve_fits.png">
+
+<h2>Driver power spectrum</h2>
+<p>Posterior P(&omega;) = (S<sup>2</sup>+C<sup>2</sup>)/(2&Delta;&omega;) per
+frequency (black squares) vs. the fitted DRW Lorentzian from posterior
+sigma_drw/tau_drw draws (blue dashed) and a plain &omega;<sup>-2</sup>
+random-walk reference (red dotted). These should roughly track each other --
+if the posterior power spectrum diverges from the Lorentzian shape a lot,
+that's worth a closer look.</p>
+<img src="power_spectrum.png">
+
+<h2>MCMC trace diagnostics</h2>
+<p>Traces should look like noisy horizontal bands (well-mixed), not
+slow drifts or a chain stuck at one value.</p>
+<img src="mcmc_diagnostics.png">
+
+<h2>Posterior corner plot: disk parameters</h2>
+<p>log_mdot / inclination, coloured per chain. Chains that land in visibly
+different places here are the same thing a Gelman-Rubin R-hat check would
+flag, made visible -- see CLAUDE.md's note on why a single chain isn't
+sufficient evidence of convergence.</p>
+<img src="corner.png">
+
+<h2>Posterior corner plot: band offset/stretch parameters</h2>
+<p>S_band / C_band for every band -- the linear scale and offset absorbing
+each band's own flux calibration, not physically meaningful on their own
+but worth checking for the same reason as the disk corner plot above:
+chains disagreeing here means the fit hasn't converged.</p>
+<img src="corner_bands.png">
+
+<h2>Driver Fourier coefficient correlation</h2>
+<p>Posterior correlation matrix of the driver's S/C Fourier coefficients
+(pooled across chains). Mostly-diagonal (near zero off-diagonal) is what
+the non-centred DRW prior parameterisation assumes; strong off-diagonal
+structure would be worth a closer look.</p>
+<img src="fourier_correlation.png">
+
+<h2>Badness of Fit vs. sample</h2>
+<p>2 x NUTS potential energy, one line per chain -- exactly the Badness-of-Fit
+that Starkey, Horne &amp; Villforth (2016, MNRAS 456, 1960) eq. 12 defines, up
+to an additive constant. Should decrease during warm-up then flatten out
+once the chain has converged; vertical grey lines (if shown) mark checkpoint
+boundaries.</p>
+<img src="bof.png">
+</body></html>
