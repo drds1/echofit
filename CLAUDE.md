@@ -444,15 +444,17 @@ and package layout.
 14. **`scripts/make_fit_animation.py` and `forward_model.disk_temperature_profile`
     are a demo/visualisation aid, not part of the fitting pipeline itself.**
     The GIF embedded in README.md's opener renders driver/echo/response-
-    function panels plus an illustrative accretion-disk view (temperature-
-    coloured, squashed vertically by `cos(inclination)` each frame, with a
-    small eye-on-a-sphere marking the observer) evolving sample by sample
-    early in a deliberately short-warmup chain -- the same short-warmup
-    chain whose driver amplitude swings motivated decision #13 above.
-    `disk_temperature_profile` factors out the axisymmetric Shakura-Sunyaev
-    `T(r)` calculation `thin_disk_response` already computes internally
-    (same formula, same Wien's-law reference point -- see
-    `tests/test_thin_disk_response.py`'s
+    function panels (response-function x-axis capped at 30 days -- the
+    response itself is always much narrower than the full lag grid it's
+    evaluated on -- and the light-curve column given more width via
+    `gridspec_kw={"width_ratios": [3, 1, 1]}`, since that's the panel
+    worth the most screen space) plus two disk panels, evolving sample by
+    sample early in a deliberately short-warmup chain -- the same
+    short-warmup chain whose driver amplitude swings motivated decision
+    #13 above. `disk_temperature_profile` factors out the axisymmetric
+    Shakura-Sunyaev `T(r)` calculation `thin_disk_response` already
+    computes internally (same formula, same Wien's-law reference point --
+    see `tests/test_thin_disk_response.py`'s
     `test_disk_temperature_profile_matches_wien_law_at_the_reference_radius`)
     so the animation (or any other caller wanting "temperature at radius
     r" directly) doesn't have to duplicate that physics; deliberately
@@ -464,8 +466,22 @@ and package layout.
     used or what wavelengths its bands are at -- only the thin-disk
     response family has a literal disk geometry to show, and the picture
     is meant to convey the physics qualitatively, not represent the
-    specific fit's own bands. The disk "tilt" is a simple 2-D orthographic
-    squash, not a 3-D/raytraced render.
+    specific fit's own bands.
+
+    **The disk view is split into two panels, not one, after a direct
+    user correction:** an earlier single-panel version squashed the
+    face-on disk vertically by `cos(inclination)` *and* moved the
+    observer icon's position to suggest the viewing angle, which read as
+    the observer itself moving rather than the disk tilting. Now:
+    face-on temperature panel (fixed geometry, colour-only updates via
+    `set_array` -- cheaper than the old per-frame `pcolormesh` rebuild,
+    titled each frame with the current `log_mdot`/`inclination` values)
+    and a separate side-on schematic panel where a line through the
+    centre rotates with inclination (vertical at `inclination=0`/face-on,
+    rotating toward horizontal/aligned with the fixed observer's line of
+    sight as inclination approaches edge-on) while the eye-on-a-sphere
+    observer and its dashed sightline are drawn once and never move.
+    Both remain a simplified 2-D schematic, not a 3-D/raytraced render.
 
 ## Known rough edges / things to check before trusting results on real data
 

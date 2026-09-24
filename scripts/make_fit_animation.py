@@ -11,22 +11,30 @@ closed-form echo evaluation as ``EchoFit.plot_lightcurve_fits``
 evaluated per-sample in chain order instead of as a posterior-predictive
 summary over a random subset.
 
-Two columns, one row per band plus a shared top row:
+Three columns, one row per band plus a shared top row (the light-curve
+column is wider than the other two -- ``width_ratios``):
 
 * top-left: the inferred driving light curve X(t).
-* top-right: an illustrative top-down view of the accretion disk, coloured
+* top-middle: a face-on, illustrative view of the accretion disk, coloured
   by ``forward_model.disk_temperature_profile`` (Shakura-Sunyaev viscous
-  temperature, hotter/bluer-in-real-life shown brighter here), squashed
-  vertically by cos(inclination) each frame to suggest the tilt, with a
-  simple eye-on-a-sphere icon showing the observer's implied vantage point
-  (higher above the disk at low inclination, level with it as inclination
-  approaches edge-on). This is a genuinely simplified 2-D projection, not a
-  3-D/raytraced render, and it always uses the viscous thin-disk profile
-  for the picture regardless of which response function the fit itself
-  used, since only the thin-disk family has a literal disk geometry to
-  show.
+  temperature, hotter shown brighter here) -- geometry is fixed, only the
+  colour scale changes per frame as log_mdot varies. The title reports the
+  frame's current log_mdot/inclination values.
+* top-right: a schematic side-on view showing the disk plane as a line
+  through the centre, tilting by the inclination angle (vertical at
+  inclination=0/face-on, rotating toward horizontal/aligned with the
+  line of sight as inclination approaches edge-on). The observer (a
+  small eye-on-a-sphere icon) and its dashed line of sight are fixed --
+  only the disk line rotates, so the tilt is unambiguous rather than
+  conflated with the observer's own position moving.
 * per band: its echo light curve (left) and response function psi(tau)
-  (right), mirroring plot_lightcurve_fits's own layout.
+  (middle, x-axis capped at 30 days -- the response itself is always much
+  narrower than the full lag grid it's evaluated on).
+
+Both disk panels are a genuinely simplified 2-D schematic, not a 3-D/
+raytraced render, and always use the viscous thin-disk profile for the
+picture regardless of which response function the fit itself used, since
+only the thin-disk family has a literal disk geometry to show.
 
 A short warmup on purpose: the point is to see the chain still finding the
 answer, not a converged posterior from frame one.
@@ -57,10 +65,11 @@ from echofit.forward_model import (
 )
 from echofit.synthetic import generate_synthetic_dataset
 
-# Purely for the illustrative disk-temperature panel -- the fit itself may
-# use bands at other wavelengths; this just sets the picture's colour scale.
+# Purely for the illustrative disk panels -- the fit itself may use bands
+# at other wavelengths; this just sets the pictures' colour/size scale.
 _DISK_REFERENCE_WAVELENGTH = 5000.0
 _DISK_N_R, _DISK_N_PHI = 40, 80
+_PSI_XLIM_DAYS = 30.0
 
 
 def _draw_observer(ax, x, y, size):
@@ -70,7 +79,6 @@ def _draw_observer(ax, x, y, size):
     pupil = mpatches.Circle((x, y), size * 0.22, facecolor="k", zorder=7)
     for p in (sphere, eye_white, pupil):
         ax.add_patch(p)
-    return [sphere, eye_white, pupil]
 
 
 def main():
@@ -99,6 +107,7 @@ def main():
 
     S, C = jnp.asarray(ef.samples["S"]), jnp.asarray(ef.samples["C"])
     log_mdot, inclination = jnp.asarray(ef.samples["log_mdot"]), jnp.asarray(ef.samples["inclination"])
+    log_mdot_np, inclination_np = np.asarray(log_mdot), np.asarray(inclination)
 
     def echo_and_psi(S_s, C_s, log_mdot_s, incl_s, wavelength, S_band_s, C_band_s):
         # Via the model module's attribute (not a direct forward_model import)
@@ -119,7 +128,7 @@ def main():
         psi_by_band[name] = np.asarray(psi_all)
     driver_samples = np.asarray(jax.vmap(lambda S_s, C_s: driver_at(S_s, C_s, ef.freqs, t_fine))(S, C))
 
-    # -- disk-panel geometry (fixed across frames; only colour + squash vary) --
+    # -- disk-panel geometry (fixed across frames; only colour/tilt vary) --
     r_in = 3.0 * float(_schwarzschild_radius_light_days(ef.M_BH))
     tau_ref_per_sample = np.asarray(lag_scaling(log_mdot, _DISK_REFERENCE_WAVELENGTH, ef.M_BH))
     r_out = 6.0 * float(tau_ref_per_sample.max())
@@ -130,29 +139,50 @@ def main():
     T_per_r = np.asarray(jax.vmap(
         lambda lm: disk_temperature_profile(r_grid, lm, _DISK_REFERENCE_WAVELENGTH, ef.M_BH)
     )(log_mdot))  # (n_frames, n_r)
-    obs_x, obs_y_max, obs_size = 1.3 * r_out, 0.9 * r_out, 0.09 * r_out
+    T_grid_all = np.broadcast_to(T_per_r[:, :, None], (len(log_mdot_np), _DISK_N_R, _DISK_N_PHI))
 
     n_bands = len(ef.bands)
-    fig, axes = plt.subplots(n_bands + 1, 2, figsize=(11, 1.8 * (n_bands + 1)))
+    fig, axes = plt.subplots(
+        n_bands + 1, 3, figsize=(13, 1.8 * (n_bands + 1)),
+        gridspec_kw={"width_ratios": [3, 1, 1]},
+    )
 
-    ax_drv, ax_disk = axes[0, 0], axes[0, 1]
+    ax_drv, ax_disk_temp, ax_disk_tilt = axes[0, 0], axes[0, 1], axes[0, 2]
     y_pad = 0.15 * (driver_samples.max() - driver_samples.min())
     ax_drv.set_ylim(driver_samples.min() - y_pad, driver_samples.max() + y_pad)
     ax_drv.set_ylabel("driver X(t)")
     ax_drv.set_title("Driving light curve", fontsize=9)
     (driver_line,) = ax_drv.plot([], [], color="0.2", lw=1.5)
 
-    ax_disk.set_xlim(-1.1 * r_out, 1.5 * r_out)
-    ax_disk.set_ylim(-1.1 * r_out, 1.1 * r_out)
-    ax_disk.set_aspect("equal")
-    ax_disk.set_xticks([])
-    ax_disk.set_yticks([])
-    ax_disk.set_title("Accretion disk (illustrative)", fontsize=9)
-    disk_artists = []
+    # -- disk-temperature panel: fixed face-on geometry, colour-only updates --
+    ax_disk_temp.set_xlim(-1.1 * r_out, 1.1 * r_out)
+    ax_disk_temp.set_ylim(-1.1 * r_out, 1.1 * r_out)
+    ax_disk_temp.set_aspect("equal")
+    ax_disk_temp.set_xticks([])
+    ax_disk_temp.set_yticks([])
+    disk_title = ax_disk_temp.set_title("", fontsize=8)
+    disk_mesh = ax_disk_temp.pcolormesh(
+        X_faceon, Y_faceon, T_grid_all[0][:-1, :-1], cmap="inferno", shading="flat"
+    )
+
+    # -- disk-tilt panel: fixed observer/sightline, only the disk line rotates --
+    L = r_out
+    obs_x = 1.4 * L
+    ax_disk_tilt.set_xlim(-1.1 * L, 1.6 * L)
+    ax_disk_tilt.set_ylim(-1.1 * L, 1.1 * L)
+    ax_disk_tilt.set_aspect("equal")
+    ax_disk_tilt.set_xticks([])
+    ax_disk_tilt.set_yticks([])
+    ax_disk_tilt.set_title("Inclination (observer fixed)", fontsize=8)
+    ax_disk_tilt.plot([0.0, obs_x], [0.0, 0.0], "--", color="0.5", lw=0.8, zorder=4)
+    _draw_observer(ax_disk_tilt, obs_x, 0.0, 0.09 * L)
+    ax_disk_tilt.plot(0.0, 0.0, "o", color="k", ms=4, zorder=4)
+    (disk_line,) = ax_disk_tilt.plot([], [], "-", color="#b83227", lw=4, solid_capstyle="round", zorder=3)
 
     band_lines, psi_lines = {}, {}
     for row, (name, d) in enumerate(ef.bands.items(), start=1):
         ax_lc, ax_psi = axes[row, 0], axes[row, 1]
+        axes[row, 2].axis("off")
         ax_lc.errorbar(d["t"], d["y"], yerr=d["yerr"], fmt="o", ms=3, color="k", alpha=0.5, zorder=1)
         y = y_by_band[name]
         pad = 0.15 * (y.max() - y.min())
@@ -163,7 +193,7 @@ def main():
 
         psi = psi_by_band[name]
         ax_psi.set_ylim(0.0, 1.05 * psi.max())
-        ax_psi.set_xlim(float(tau_grid_np.min()), float(tau_grid_np.max()))
+        ax_psi.set_xlim(0.0, _PSI_XLIM_DAYS)
         ax_psi.set_ylabel(f"{name}\nψ(τ)")
         (psi_lines[name],) = ax_psi.plot([], [], color="C3", lw=1.5)
         if row > 1:
@@ -182,20 +212,15 @@ def main():
             psi_lines[name].set_data(tau_grid_np, psi_by_band[name][i])
         title.set_text(f"MCMC sample {i + 1}/{args.num_frames} -- model taking shape")
 
-        for artist in disk_artists:
-            artist.remove()
-        disk_artists.clear()
-        incl_rad = np.deg2rad(float(inclination[i]))
-        Y_proj = Y_faceon * np.cos(incl_rad)
-        T_grid = np.broadcast_to(T_per_r[i][:, None], X_faceon.shape)
-        mesh = ax_disk.pcolormesh(X_faceon, Y_proj, T_grid[:-1, :-1], cmap="inferno", shading="flat")
-        disk_artists.append(mesh)
-        obs_y = obs_y_max * np.cos(incl_rad)
-        (sightline,) = ax_disk.plot([0.0, obs_x], [0.0, obs_y], "--", color="0.5", lw=0.8, zorder=4)
-        disk_artists.append(sightline)
-        disk_artists.extend(_draw_observer(ax_disk, obs_x, obs_y, obs_size))
+        disk_mesh.set_array(T_grid_all[i][:-1, :-1].ravel())
+        disk_title.set_text(f"log_mdot = {log_mdot_np[i]:.2f}, inclination = {inclination_np[i]:.1f}°")
 
-        return [driver_line, title, *band_lines.values(), *psi_lines.values(), *disk_artists]
+        incl_rad = np.deg2rad(float(inclination_np[i]))
+        dx, dy = L * np.sin(incl_rad), L * np.cos(incl_rad)
+        disk_line.set_data([-dx, dx], [-dy, dy])
+
+        return [driver_line, title, disk_mesh, disk_title, disk_line,
+                *band_lines.values(), *psi_lines.values()]
 
     ani = FuncAnimation(fig, update, frames=args.num_frames, blit=False)
     out_path = args.outdir / "fit_animation.gif"
