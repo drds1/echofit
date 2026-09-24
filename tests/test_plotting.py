@@ -71,6 +71,23 @@ def test_plot_fourier_correlation_handles_zero_variance_frequencies():
     assert np.isnan(raw_corr[2, :]).any()
 
 
+def test_plot_bof_one_line_per_chain():
+    rng = np.random.default_rng(0)
+    potential_energy = rng.normal(5.0, 1.0, size=(3, 50))
+    fig, ax = plotting.plot_bof(potential_energy, checkpoint_every=20)
+    # 3 chain lines plus 2 checkpoint-boundary axvlines (at x=20, x=40).
+    assert len(ax.lines) == 5
+    for c in range(3):
+        np.testing.assert_allclose(ax.lines[c].get_ydata(), 2.0 * potential_energy[c])
+
+
+def test_plot_bof_accepts_single_chain_1d_array():
+    rng = np.random.default_rng(0)
+    potential_energy = rng.normal(5.0, 1.0, size=50)
+    fig, ax = plotting.plot_bof(potential_energy)
+    assert len(ax.lines) == 1
+
+
 def _tiny_physical_fit():
     from echofit.synthetic import generate_synthetic_dataset
     from echofit.echofit import EchoFit
@@ -105,6 +122,19 @@ def test_echofit_plot_fourier_correlation_runs():
     assert len(axes) == 2
 
 
+def test_echofit_plot_bof_runs_since_potential_energy_is_requested_by_default():
+    ef, _ = _tiny_physical_fit()
+    fig, ax = ef.plot_bof()
+    assert len(ax.lines) == 1
+
+
+def test_echofit_plot_bof_raises_without_potential_energy():
+    ef, _ = _tiny_physical_fit()
+    ef._extra_fields_by_chain = {}
+    with pytest.raises(RuntimeError, match="potential_energy"):
+        ef.plot_bof()
+
+
 def test_report_includes_disk_and_band_corners_but_not_free_lag_for_physical_fit(tmp_path):
     from echofit import reporting
 
@@ -115,8 +145,9 @@ def test_report_includes_disk_and_band_corners_but_not_free_lag_for_physical_fit
     assert "corner.png" in html
     assert "corner_bands.png" in html
     assert "fourier_correlation.png" in html
+    assert "bof.png" in html
     assert "corner_free_lag.png" not in html
-    for fname in ("corner.png", "corner_bands.png", "fourier_correlation.png"):
+    for fname in ("corner.png", "corner_bands.png", "fourier_correlation.png", "bof.png"):
         assert (tmp_path / fname).exists()
     assert not (tmp_path / "corner_free_lag.png").exists()
 

@@ -18,6 +18,10 @@ Plotting entry points, matching the EchoFit API:
                                  driver's Fourier coefficients (a corner
                                  plot doesn't scale to n_freq often being
                                  in the tens; a heatmap does).
+* ``plot_bof``                -- Badness-of-Fit (Starkey+2016's BOF, here
+                                 ``2 * potential_energy``) per sample,
+                                 coloured per chain -- should decrease then
+                                 flatten as the chain converges.
 
 All functions take plain numpy-able arrays / dicts so they have no
 dependency on JAX or NumPyro themselves.
@@ -468,3 +472,56 @@ def plot_fourier_correlation(S_samples: np.ndarray, C_samples: np.ndarray, freqs
     fig.colorbar(im, ax=axes, shrink=0.8, label="posterior correlation")
     fig.suptitle("Driver Fourier coefficient correlation")
     return fig, axes
+
+
+def plot_bof(potential_energy: np.ndarray, checkpoint_every: Optional[int] = None, figsize=(8, 4)):
+    """Badness-of-Fit trace, one line per chain -- the same diagnostic
+    Starkey, Horne & Villforth (2016, MNRAS 456, 1960; arXiv:1511.06162)'s
+    eq. 12 defines, ``BOF = chi**2 + sum(ln(sigma_i**2)) - 2*ln(P(Theta)) +
+    const``, which is exactly ``2 * potential_energy`` up to that additive
+    constant: NUTS's ``potential_energy`` is already
+    ``-log(likelihood * prior)`` (a standard Gaussian log-likelihood's
+    ``-2*ln`` is ``chi**2 + sum(ln(sigma_i**2)) + const``, matching eq. 12
+    directly once doubled), so no separate BOF bookkeeping is needed --
+    NUTS already computes this value on every step to decide whether to
+    accept a proposal, it just isn't returned unless asked for (see
+    ``inference.run_mcmc``/``run_mcmc_chunked``, which now request
+    ``extra_fields=("potential_energy",)``).
+
+    Should decrease (noisily) then flatten once a chain has converged;
+    a chain that's still trending down at the end of the run hasn't
+    finished burning in, and multiple chains whose BOF settles at visibly
+    different levels is the same non-convergence signal
+    ``plot_corner``/Gelman-Rubin R-hat would also flag.
+
+    Parameters
+    ----------
+    potential_energy : array, shape (n_samples,) or (n_chains, n_samples)
+        ``ef.extra_fields["potential_energy"]`` (single-chain/pooled) or
+        ``ef.mcmc.get_extra_fields(group_by_chain=True)["potential_energy"]``
+        (multi-chain, one line per chain).
+    checkpoint_every : int, optional
+        If given, draws a light vertical line at each checkpoint boundary
+        (only meaningful for an ``EchoFit(title=...)`` checkpointed run,
+        which is always single-chain -- see CLAUDE.md decision #6).
+    """
+    potential_energy = np.asarray(potential_energy)
+    if potential_energy.ndim == 1:
+        potential_energy = potential_energy[None, :]
+    bof = 2.0 * potential_energy
+
+    fig, ax = plt.subplots(figsize=figsize)
+    n_chains, n_samples = bof.shape
+    for c in range(n_chains):
+        ax.plot(bof[c], lw=0.8, alpha=0.85, label=f"chain {c}" if n_chains > 1 else None)
+    if checkpoint_every:
+        for x in range(checkpoint_every, n_samples, checkpoint_every):
+            ax.axvline(x, color="0.7", lw=0.6, zorder=0)
+    ax.set_xlabel("sample")
+    ax.set_ylabel("BOF (2 x potential energy)")
+    ax.grid(alpha=0.25)
+    if n_chains > 1:
+        ax.legend(fontsize=8)
+    ax.set_title("Badness of Fit vs. sample")
+    fig.tight_layout()
+    return fig, ax

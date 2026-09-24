@@ -364,6 +364,47 @@ and package layout.
     (checked via `ef.samples`/`ef.bands`, not assumed), so a report never
     errors on a fit that doesn't have the relevant parameters.
 
+11. **Badness-of-Fit (`plot_bof`) piggybacks on NUTS's own
+    `potential_energy`, and doesn't need any new computation.** Starkey,
+    Horne & Villforth (2016) eq. 12 defines `BOF = chi**2 +
+    sum(ln(sigma_i**2)) - 2*ln(P(Theta)) + const`; NumPyro's NUTS already
+    computes `potential_energy = -log(likelihood * prior)` on every
+    leapfrog step to decide whether to accept a proposal, and for a
+    standard Gaussian log-likelihood `-2*ln(likelihood)` is exactly
+    `chi**2 + sum(ln(sigma_i**2)) + const`, so `BOF = 2 *
+    potential_energy` up to that additive constant -- confirmed by direct
+    derivation, not assumed. `inference.run_mcmc`/`run_mcmc_chunked` both
+    request `extra_fields=("potential_energy",)` (NumPyro only returns
+    `"diverging"` unless asked), and `EchoFit` now tracks
+    `self._extra_fields_by_chain` the same way it already tracked
+    `self._samples_by_chain`. `EchoFit.plot_bof()` /
+    `plotting.plot_bof` draw one BOF trace per chain; wired into
+    `reporting.generate_report` conditionally on `"potential_energy" in
+    ef.extra_fields`, since a checkpoint resumed from before this feature
+    existed (`_merge_dicts` only iterates the first chunk's keys, so an
+    old `prev_extra` without `potential_energy` silently drops it from the
+    merge rather than erroring) won't have it -- a narrow, accepted edge
+    case, not one worth extra machinery for.
+
+12. **`EchoFit.fit(title=..., report_every=...)` can refresh
+    `report.html` partway through a long checkpointed run, not just once
+    at the end.** `report_every` (in samples, like `checkpoint_every`) is
+    checked inside the existing `_on_chunk_done` callback
+    (`inference.run_mcmc_chunked`'s per-chunk hook, previously used only
+    for on-disk persistence): once enough new samples have accumulated
+    since the last refresh, it updates `self.samples`/`self.extra_fields`/
+    `self._samples_by_chain`/`self._extra_fields_by_chain` from the
+    merged-so-far checkpoint data and calls `reporting.generate_report`
+    again, so the report reflects genuinely fresh state rather than a
+    stale write. Off by default (`None`): re-rendering the full plot set
+    (multiple corner plots, posterior-predictive fits with credible
+    bands, ...) has real cost, and most callers won't be watching a run
+    live. `self.mcmc` stays `None` throughout the checkpointed path
+    regardless (decision #6) -- `reporting.py` never reads it, only
+    `ef.samples`/`ef.extra_fields`/`ef._samples_by_chain`/
+    `ef._extra_fields_by_chain`/`ef.bands`, which is what makes updating
+    those mid-fit sufficient for a mid-fit report to work at all.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model

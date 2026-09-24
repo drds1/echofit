@@ -95,6 +95,7 @@ class EchoFit:
         self.mcmc = None
         self.samples: Optional[dict] = None
         self.extra_fields: dict = {}
+        self._extra_fields_by_chain: dict = {}
 
         self._output_root = run_manager.resolve_output_root(output_dir) if title else None
         self.run_dir: Optional[Path] = None
@@ -311,6 +312,7 @@ class EchoFit:
         max_tree_depth=_UNSET,
         chain_method: str = "parallel",
         checkpoint_every=_UNSET,
+        report_every: Optional[int] = None,
         progress_bar: bool = True,
         generate_report: bool = True,
     ):
@@ -329,6 +331,18 @@ class EchoFit:
         posterior (as ``chains.nc``, an ArviZ ``InferenceData``) and (if
         ``generate_report``) the same plots + report.html as
         ``scripts/smoke_test.py`` to the run directory.
+
+        report_every : int, optional
+            Only used on the checkpointed path. If given, ``report.html``
+            (and the PNGs it references) are refreshed in ``run_dir`` after
+            every checkpoint that adds up to at least this many new
+            samples since the last refresh, so a long-running fit's report
+            can be watched as it progresses rather than only seen once at
+            the end. Off by default, since re-rendering the full plot set
+            (corner plots, posterior-predictive fits, ...) on every
+            checkpoint would add real overhead to short ``checkpoint_every``
+            values; the final report (governed by ``generate_report``) is
+            always written regardless of this setting.
 
         After ``.resume()``, any arguments left unset here reuse the
         original run's settings (so ``ef.fit()`` with no arguments "just
@@ -352,6 +366,7 @@ class EchoFit:
             self.samples = self.mcmc.get_samples()
             self._samples_by_chain = self.mcmc.get_samples(group_by_chain=True)
             self.extra_fields = self.mcmc.get_extra_fields()
+            self._extra_fields_by_chain = self.mcmc.get_extra_fields(group_by_chain=True)
             return self
 
         # -- title given: checkpointed/resumable single-chain path --
@@ -414,6 +429,8 @@ class EchoFit:
                 ))
 
         chunk_samples_so_far, chunk_extra_so_far = [], []
+        t0 = time.time()
+        last_report_at = [n_already_done]
 
         def _on_chunk_done(mcmc, last_state, n_done_total):
             chunk_samples_so_far.append(mcmc.get_samples())
@@ -425,7 +442,17 @@ class EchoFit:
             run_manager.save_state(checkpoint_dir / "state.pkl", last_state)
             print(f"  checkpoint: {n_done_total}/{num_samples} samples saved.")
 
-        t0 = time.time()
+            if report_every is not None and n_done_total - last_report_at[0] >= report_every:
+                last_report_at[0] = n_done_total
+                self.samples = merged_samples
+                self.extra_fields = merged_extra
+                self._samples_by_chain = {k: v[None, ...] for k, v in merged_samples.items()}
+                self._extra_fields_by_chain = {k: v[None, ...] for k, v in merged_extra.items()}
+                reporting.generate_report(
+                    self, self.run_dir, fit_seconds=time.time() - t0, title=self.title
+                )
+                print(f"  report refreshed at {n_done_total}/{num_samples} samples.")
+
         rng_key = jax.random.PRNGKey(rng_seed)
         samples_this_call, samples_by_chain_this_call, extra_this_call, _ = run_mcmc_chunked(
             reverberation_model, self._model_kwargs(), rng_key,
@@ -439,6 +466,7 @@ class EchoFit:
         self.samples = _merge_dicts([prev_samples, samples_this_call])
         self.extra_fields = _merge_dicts([prev_extra, extra_this_call])
         self._samples_by_chain = {k: v[None, ...] for k, v in self.samples.items()}
+        self._extra_fields_by_chain = {k: v[None, ...] for k, v in self.extra_fields.items()}
         self.mcmc = None  # no single mcmc object spans all chunks in this path
 
         self._save_chains(self.run_dir)
@@ -559,6 +587,23 @@ class EchoFit:
             raise RuntimeError("Call .fit() before plotting the Fourier correlation.")
         return plotting.plot_fourier_correlation(
             self.samples["S"], self.samples["C"], np.asarray(self.freqs), **kwargs
+        )
+
+    def plot_bof(self, checkpoint_every=None, **kwargs):
+        """Badness-of-Fit trace (2 x NUTS potential energy, one line per
+        chain) -- see :func:`plotting.plot_bof`. Requires ``extra_fields``
+        to include ``potential_energy``, which every fit since this feature
+        was added requests by default (``inference.run_mcmc``/
+        ``run_mcmc_chunked``); raises if it's missing, e.g. after resuming
+        a checkpoint saved before this feature existed.
+        """
+        if not self._extra_fields_by_chain or "potential_energy" not in self._extra_fields_by_chain:
+            raise RuntimeError(
+                "plot_bof: no 'potential_energy' in extra_fields -- call .fit() first, "
+                "or (if resuming) this checkpoint predates BOF tracking."
+            )
+        return plotting.plot_bof(
+            self._extra_fields_by_chain["potential_energy"], checkpoint_every=checkpoint_every, **kwargs
         )
 
     def plot_lightcurve_fits(

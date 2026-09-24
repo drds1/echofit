@@ -209,8 +209,10 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# scripts/smoke_test.py output
-smoke_test_output/
+# scripts/smoke_test.py output is committed (see README's "Visual smoke
+# test" section) so the repo carries a live example of the standard plots
+# + report.html -- regenerate and re-commit it after any change to
+# forward_model.py/model.py/echofit.py/plotting.py/reporting.py.
 
 # EchoFit(title=...) run outputs (default location; see run_manager.py)
 outputs/

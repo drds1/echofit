@@ -43,7 +43,7 @@ def test_title_run_writes_expected_outputs(tmp_path):
     for fname in (
         "manifest.json", "data.npz", "grid.npz", "chains.npz", "report.html",
         "raw_lightcurves.png", "lightcurve_fits.png", "power_spectrum.png", "mcmc_diagnostics.png",
-        "corner.png", "corner_bands.png", "fourier_correlation.png",
+        "corner.png", "corner_bands.png", "fourier_correlation.png", "bof.png",
         "checkpoint/samples.npz", "checkpoint/extra_fields.npz", "checkpoint/state.pkl",
     ):
         assert (ef.run_dir / fname).exists(), f"missing {fname}"
@@ -104,6 +104,39 @@ def test_resume_continues_an_interrupted_fit(tmp_path, monkeypatch):
     assert not np.array_equal(
         final_checkpoint["log_mdot"][:20], final_checkpoint["log_mdot"][20:40]
     )
+
+
+def test_report_every_refreshes_report_mid_fit(tmp_path, monkeypatch):
+    """report_every should write report.html (and its PNGs) at least once
+    before the fit finishes, not only at the very end -- checked by
+    watching for report.html to already exist from inside on_chunk_done
+    partway through the run, before the final chunk completes."""
+    data = _make_synthetic()
+    ef = _build_echofit(data, title="report_every_unit_test", output_dir=str(tmp_path))
+
+    seen_mid_fit = {"exists": False}
+    real_chunked = echofit_mod.run_mcmc_chunked
+
+    def watching_chunked(*args, **kwargs):
+        orig_cb = kwargs["on_chunk_done"]
+
+        def cb(mcmc, last_state, n_done_total):
+            orig_cb(mcmc, last_state, n_done_total)
+            if n_done_total < 40:
+                seen_mid_fit["exists"] = seen_mid_fit["exists"] or (ef.run_dir / "report.html").exists()
+
+        kwargs["on_chunk_done"] = cb
+        return real_chunked(*args, **kwargs)
+
+    monkeypatch.setattr(echofit_mod, "run_mcmc_chunked", watching_chunked)
+    ef.fit(
+        rng_seed=0, num_warmup=10, num_samples=40, checkpoint_every=20,
+        report_every=20, progress_bar=False,
+    )
+
+    assert seen_mid_fit["exists"]
+    assert (ef.run_dir / "report.html").exists()
+    assert len(ef.samples["log_mdot"]) == 40
 
 
 def test_resume_of_already_complete_run_is_a_no_op(tmp_path):

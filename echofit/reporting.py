@@ -113,6 +113,15 @@ def generate_report(
     fig_fourier.savefig(paths["fourier_correlation"], dpi=150, bbox_inches="tight")
     figs_to_close.append(fig_fourier)
 
+    # potential_energy is only absent for a checkpoint resumed from before
+    # this feature existed (CLAUDE.md) -- skip rather than error.
+    if "potential_energy" in ef.extra_fields:
+        checkpoint_every = (ef._fit_config or {}).get("checkpoint_every")
+        fig_bof, _ = ef.plot_bof(checkpoint_every=checkpoint_every)
+        paths["bof"] = out_dir / "bof.png"
+        fig_bof.savefig(paths["bof"], dpi=150, bbox_inches="tight")
+        figs_to_close.append(fig_bof)
+
     for fig in figs_to_close:
         plt.close(fig)
 
@@ -211,6 +220,18 @@ structure would be worth a closer look.</p>
 """)
     corner_section = "".join(corner_sections)
 
+    bof_section = ""
+    if "bof" in paths:
+        bof_section = f"""
+<h2>Badness of Fit vs. sample</h2>
+<p>2 x NUTS potential energy, one line per chain -- exactly the Badness-of-Fit
+that Starkey, Horne &amp; Villforth (2016, MNRAS 456, 1960) eq. 12 defines, up
+to an additive constant. Should decrease during warm-up then flatten out
+once the chain has converged; vertical grey lines (if shown) mark checkpoint
+boundaries.</p>
+<img src="{paths['bof'].name}">
+"""
+
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>echofit report{f' -- {title}' if title else ''}</title>
 <style>
@@ -252,5 +273,5 @@ that's worth a closer look.</p>
 <p>Traces should look like noisy horizontal bands (well-mixed), not
 slow drifts or a chain stuck at one value.</p>
 <img src="{paths['diagnostics'].name}">
-{corner_section}</body></html>
+{corner_section}{bof_section}</body></html>
 """
