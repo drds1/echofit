@@ -405,6 +405,42 @@ and package layout.
     `ef._extra_fields_by_chain`/`ef.bands`, which is what makes updating
     those mid-fit sufficient for a mid-fit report to work at all.
 
+13. **`sigma_drw`'s prior scale is anchored to the registered data's own
+    amplitude (`EchoFit._sigma_drw_prior_scale`), not a fixed constant --
+    found via `scripts/make_fit_animation.py`'s GIF, which made a real,
+    previously-unnoticed degeneracy visible.** Rescaling the driver by any
+    `lambda != 0` (`S, C -> lambda*S, lambda*C`), compensated by rescaling
+    every band's gain by `1/lambda` (`S_band -> S_band/lambda` for every
+    band), leaves every predicted light curve -- and hence the
+    likelihood -- exactly unchanged. Unlike the shift degeneracy in
+    decision #7, this holds regardless of `lag_mode` or band count: it's a
+    property of the model's linear driver-amplitude/per-band-gain
+    separability, not something the disk physics (shared `log_mdot`, etc.)
+    can break. With a fixed `HalfNormal(2.0)` prior on `sigma_drw`
+    (unrelated to the actual light curves' units) and `S_band ~
+    LogNormal(0, 1)`, this direction is only weakly regularised by the
+    priors -- visible directly in the animation as the inferred driver
+    growing/shrinking with little constraint early in a chain, before the
+    (still fairly broad) prior eventually reins it in.
+
+    Checked directly against the author's PhD-era CREAM Fortran code
+    (`cream_f90.f90`) for how it handled this at the time: it has an
+    explicit, optional Gaussian prior directly on `P0`, the power-spectrum
+    normalisation (`sigma_drw`'s counterpart), gated by
+    `sigp0square`/`siglogp0` (the `bof4` term, off by default). Same fix,
+    same mechanism, applied here: `EchoFit._model_kwargs()` now computes a
+    data-anchored `sigma_drw_prior_scale` (prefers a registered driver
+    light curve's own std if one exists, via `add_driver_lightcurve`,
+    since that's the most direct available observation of the driver;
+    otherwise the largest std across the registered bands, since the
+    least-reprocessed band is the closest available proxy for the driver's
+    own amplitude -- a reprocessed echo is usually damped relative to what
+    drives it, not amplified) and passes it to
+    `reverberation_model(..., sigma_drw_prior_scale=...)`, which now takes
+    that as a parameter instead of hardcoding `2.0`. The old fixed value
+    remains the function's own default, for direct/standalone calls to
+    `reverberation_model` outside `EchoFit`.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model
