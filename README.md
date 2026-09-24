@@ -1,4 +1,4 @@
-# echofit
+# 🔭 echofit
 
 `echofit` is an AGN light curve fitting code that uses MCMC (via
 [JAX](https://github.com/google/jax) + [NumPyro](https://num.pyro.ai/)) to
@@ -8,24 +8,24 @@ physically motivated disk model's parameters: accretion rate (`mdot`),
 inclination, and temperature profile. Read on for install instructions,
 tests on synthetic data, and example usage.
 
-## Contents
+## 🗂️ Contents
 
-- [Background](#background)
-- [Model](#model)
-- [Package layout](#package-layout)
-- [Install](#install)
-  - [1. Check you have Python 3.10 or newer](#1-check-you-have-python-310-or-newer)
-  - [2. Install Poetry](#2-install-poetry)
-  - [3. Get the code and install its dependencies](#3-get-the-code-and-install-its-dependencies)
-  - [4. Run things with `poetry run`](#4-run-things-with-poetry-run)
-- [Quickstart](#quickstart)
-- [Fitting your own light curves, with saved/resumable runs](#fitting-your-own-light-curves-with-savedresumable-runs)
-- [Visual smoke test](#visual-smoke-test)
-- [Swapping the response function](#swapping-the-response-function)
-- [Emission-line / free-lag mode and driver light curves](#emission-line--free-lag-mode-and-driver-light-curves)
-- [Status / caveats](#status--caveats)
+- [🔭 Background](#-background)
+- [🌀 Model](#-model)
+- [📦 Package layout](#-package-layout)
+- [⚙️ Install](#-install)
+  - [🐍 1. Check you have Python 3.10 or newer](#-1-check-you-have-python-310-or-newer)
+  - [📜 2. Install Poetry](#-2-install-poetry)
+  - [📥 3. Get the code and install its dependencies](#-3-get-the-code-and-install-its-dependencies)
+  - [▶️ 4. Run things with `poetry run`](#-4-run-things-with-poetry-run)
+- [🚀 Quickstart](#-quickstart)
+- [📈 Fitting your own light curves, with saved/resumable runs](#-fitting-your-own-light-curves-with-savedresumable-runs)
+- [🧪 Visual smoke test](#-visual-smoke-test)
+- [🔄 Swapping the response function](#-swapping-the-response-function)
+- [🌈 Emission-line / free-lag mode and driver light curves](#-emission-line--free-lag-mode-and-driver-light-curves)
+- [⚠️ Status / caveats](#-status--caveats)
 
-## Background
+## 🔭 Background
 
 Active galactic nuclei (AGN) are powered by gas accreting onto a
 supermassive black hole through a hot, luminous disk. That disk doesn't
@@ -83,7 +83,7 @@ software (JAVELIN, PyROA, CREAM/MICA among others) rather than starting
 from nothing: see "Status / caveats" below for what hasn't been validated
 against real campaigns yet.
 
-## Model
+## 🌀 Model
 
 Each band's observed light curve is modelled as
 
@@ -118,7 +118,7 @@ Only these are inferred: `log_mdot`, `inclination`, `sigma_drw`, `tau_drw`,
 the driver Fourier coefficients `{S_k, C_k}`, and per-band `{S_band, C_band}`.
 **`M_BH` is always a fixed input.**
 
-## Package layout
+## 📦 Package layout
 
 ```
 echofit/
@@ -169,13 +169,13 @@ tests/
                           driver-anchored free-lag recovery test
 ```
 
-## Install
+## ⚙️ Install
 
 The steps below assume nothing is already set up beyond a normal Linux (or
 macOS) shell: no Python environment, no Poetry, nothing. If you already
 have both, skip to step 3.
 
-### 1. Check you have Python 3.10 or newer
+### 🐍 1. Check you have Python 3.10 or newer
 
 ```bash
 python3 --version
@@ -199,7 +199,7 @@ sudo pacman -S python
 brew install python@3.11
 ```
 
-### 2. Install Poetry
+### 📜 2. Install Poetry
 
 This project uses [Poetry](https://python-poetry.org/) to manage its
 Python environment and dependencies, so you don't have to. Install it with
@@ -218,7 +218,7 @@ then open a new terminal (or run `source ~/.bashrc`) and try again.
 poetry --version
 ```
 
-### 3. Get the code and install its dependencies
+### 📥 3. Get the code and install its dependencies
 
 ```bash
 git clone https://github.com/drds1/echofit.git
@@ -236,7 +236,7 @@ tested against. `--extras dev` is needed, not `--with dev`: the optional
 group. This step downloads a few hundred MB (mostly JAX) and can take a
 few minutes the first time.
 
-### 4. Run things with `poetry run`
+### ▶️ 4. Run things with `poetry run`
 
 There's no separate "activate the environment" step to remember. Prefix
 any command that needs this project's packages with `poetry run`:
@@ -262,7 +262,7 @@ CPU is fine for everything above; see the
 [JAX install guide](https://github.com/google/jax#installation) if you
 want GPU/TPU support instead.
 
-## Quickstart
+## 🚀 Quickstart
 
 ```python
 from echofit import EchoFit, generate_synthetic_dataset
@@ -308,7 +308,7 @@ a checkpoint resumed from before this feature existed).
 
 See `notebooks/demo.ipynb` for the full walkthrough.
 
-## Fitting your own light curves, with saved/resumable runs
+## 📈 Fitting your own light curves, with saved/resumable runs
 
 **From the terminal, with no Python required:** `scripts/fit_lightcurves.py`
 wraps everything below as a command-line tool, reading each band's light
@@ -423,7 +423,7 @@ variable, then `./outputs` (relative to wherever you run your script from).
 Without `title=`, `EchoFit` behaves exactly as in the Quickstart above --
 nothing is written to disk.
 
-## Visual smoke test
+## 🧪 Visual smoke test
 
 For a quick "did I break anything" check after touching `forward_model.py`,
 `model.py`, or `echofit.py`, run a short fit on synthetic data and save plots
@@ -447,7 +447,7 @@ Writes PNGs and a `report.html` (open it to see everything in one page) to
 `smoke_test_output/`. This is a visual/eyeball check, not a pass/fail test;
 for that, see `tests/test_recovery.py`.
 
-## Swapping the response function
+## 🔄 Swapping the response function
 
 `forward_model.response_function` is the single place the physical
 (`lag_mode="physical"`, see below) response shape lives. Any replacement
@@ -524,7 +524,7 @@ to patch, since `echofit.py`'s plotting code reads it the same way
 (module-attribute access, not its own import), so a swap is honoured
 consistently by both fitting and plotting.
 
-## Emission-line / free-lag mode and driver light curves
+## 🌈 Emission-line / free-lag mode and driver light curves
 
 Every band defaults to `lag_mode="physical"`: its mean lag comes from
 `lag_scaling(log_mdot, wavelength, M_BH)`, tied to every other physical
@@ -578,7 +578,7 @@ result; more/cleaner data also reduces the risk. See
 `tests/test_free_lag_mode.py::test_free_lag_recovery_with_driver_anchor`
 for a worked example.
 
-## Status / caveats
+## ⚠️ Status / caveats
 
 This is a research scaffold, not a validated production pipeline:
 
