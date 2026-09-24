@@ -451,17 +451,28 @@ and package layout.
     worth the most screen space) plus two disk panels, evolving sample by
     sample early in a deliberately short-warmup chain -- the same
     short-warmup chain whose driver amplitude swings motivated decision
-    #13 above. `disk_temperature_profile` factors out the axisymmetric
-    Shakura-Sunyaev `T(r)` calculation `thin_disk_response` already
-    computes internally (same formula, same Wien's-law reference point --
-    see `tests/test_thin_disk_response.py`'s
-    `test_disk_temperature_profile_matches_wien_law_at_the_reference_radius`)
-    so the animation (or any other caller wanting "temperature at radius
-    r" directly) doesn't have to duplicate that physics; deliberately
-    *not* refactored to share code with `thin_disk_response`'s own
-    2-D `(tau, phi)`-grid evaluation, to avoid any regression risk to that
-    already-validated function for a purely cosmetic reuse. Always uses
-    the viscous-only profile at a fixed illustrative reference wavelength
+    #13 above. `disk_temperature_profile` and `thin_disk_response`'s
+    viscous term now share the one actual formula, via `_viscous_t4_shape`
+    (same formula, same Wien's-law reference point -- see
+    `tests/test_thin_disk_response.py`'s
+    `test_disk_temperature_profile_matches_wien_law_at_the_reference_radius`).
+    Originally deliberately *not* shared, to avoid regression risk to the
+    already-validated `thin_disk_response` for what was then a purely
+    cosmetic reuse -- revisited and done anyway after a direct "best not to
+    have duplication of code" request, once there was a second real
+    consumer of the same physics (this decision, the animation) and the
+    existing `thin_disk_response` test suite (20 tests, all passing
+    unchanged after the refactor) to catch a regression if the shared
+    helper got it wrong. `_viscous_t4_shape` takes the two callers'
+    already-clipped radius and the constants they'd already computed
+    (`tau_ref`, `r_in`) rather than clipping internally, since the two
+    callers need genuinely different clipping strategies at `r <= r_in`
+    (`thin_disk_response`'s `r_star` depends on a sampled parameter and
+    needs a smooth cutoff -- handled separately via its own sigmoid mask,
+    same zero-gradient concern as decision #7; `disk_temperature_profile`
+    doesn't sample `r`, so a plain hard clip is fine there) -- the formula
+    is shared, the clipping decision deliberately isn't. Always uses the
+    viscous-only profile at a fixed illustrative reference wavelength
     (5000 Angstrom), regardless of which response function the fit itself
     used or what wavelengths its bands are at -- only the thin-disk
     response family has a literal disk geometry to show, and the picture
@@ -524,6 +535,19 @@ and package layout.
     colour-count reduction was checked and barely helps (96 to 64 colours
     saved well under 1MB) without visibly hurting the smooth gradients.
 
+    **Gridlines on every light-curve/psi/BOF panel (`alpha=0.6`, both here
+    and in `plotting.py`) after direct feedback that the charts "don't
+    have gridlines"** -- they technically did (`alpha=0.25`), but
+    `grid.color`'s default (`#b0b0b0`, already a light grey) at that alpha
+    on a white background turned out to be essentially invisible once
+    actually rendered, not just subtle; confirmed by rendering comparison
+    swatches at several alpha values before picking `0.6`. Also added a
+    sixth panel, Badness of Fit vs. sample (`2 * potential_energy`,
+    matching `plotting.plot_bof`) as a growing trace extending one point
+    per frame -- reuses `ef.extra_fields["potential_energy"]`, already
+    collected by every fit by default (decision #11), so no extra
+    computation, same as the standalone `plot_bof`.
+
 15. **`inclination` is sampled uniform in `cos(inclination)`, not
     `inclination` itself, and `EchoFit(fixed_params={...})` generalises
     decision #3 ("`M_BH` is always fixed") to any scalar site.** Both
@@ -567,6 +591,61 @@ and package layout.
       `manifest.json` across `EchoFit.resume()` -- forgetting this would
       silently change the model structure (which sites get sampled at all)
       partway through a checkpointed run's chunks.
+
+16. **Test coverage is measured (`pytest-cov`), enforced locally via
+    pre-commit hooks, and run in full by CI -- all added directly in
+    response to "how is our test coverage".** See README's "Tests and
+    coverage" for the commands; the summary here is what changed and why.
+    Coverage sat at ~90% line coverage before any of this was added (the
+    codebase already had substantial tests throughout this file's earlier
+    decisions), concentrated weakest in `run_manager.py` (68%) and
+    `synthetic.py` (75%) -- their less-common paths (default arguments,
+    observing-gap handling, resume edge cases) rather than anything
+    central to the model. `tests/test_validation_and_utils.py` adds a
+    first pass at those, plus EchoFit's own input-validation/guard-clause
+    paths (bad `lag_mode`, `build_grid()` with no bands, every `plot_*`
+    method's "call `.fit()` first" check) and a couple of branches nothing
+    else happened to exercise (`max_tree_depth` actually reaching NUTS,
+    `EchoFit.resume()` with a registered driver light curve, the
+    `chains.nc` best-effort fallback documented above actually working
+    when netCDF writing fails, not just having a `try`/`except` around it).
+
+    **A genuine bug found this way, not a hypothetical one:**
+    `grid_utils.estimate_dt_min`'s "no band has 2+ points" fallback
+    (`dt_min = t_span if t_span is not None else 1.0`) was unreachable
+    dead code -- `np.concatenate([])` on an empty list of per-band gap
+    arrays raises `ValueError` immediately, before the code ever reaches
+    the check that was supposed to handle exactly that case. Fixed by
+    checking the list of per-band diffs directly, before concatenating,
+    instead of checking the (never successfully computed) concatenated
+    result's size. This is exactly the value a coverage report is for --
+    "line never executed" flagged a branch that could never execute given
+    how it was reached, not just one nobody had gotten around to testing.
+
+    **Pre-commit hooks run file hygiene only (trailing whitespace,
+    large-file checks, valid YAML/TOML), deliberately *not* any tests** --
+    see `.pre-commit-config.yaml`, and its own comment for why, since this
+    was a real course-correction worth recording rather than the first
+    design that shipped. `@pytest.mark.slow` (registered in
+    `pyproject.toml`) exists and marks the handful of tests actually
+    responsible for the bulk of the full suite's ~15-minute runtime
+    (decided from real `pytest --durations=0` data, not a guess -- one of
+    them, the free-lag 4-chain recovery test, is a large fraction of it by
+    itself), and the plan going in was a local `pytest -m "not slow"` hook
+    at roughly that time saved back. Measured directly instead of assumed:
+    that "fast" subset still took **~10 minutes**, because almost every
+    other test in this suite also fits a real (if small) NUTS chain, each
+    paying its own one-time JAX JIT-compilation cost -- there's no large
+    genuinely-fast subset available short of cutting down to only the
+    handful of pure-unit (no-fit) tests, which would defeat the point of
+    a pre-commit smoke check. Large-file checks exclude
+    `docs/images/fit_animation.gif` and `smoke_test_output/`, both
+    intentional, regenerated-on-purpose binary assets, not accidents.
+    Tests instead run automatically via CI (`.github/workflows/tests.yml`,
+    full suite, no marker filter, every push/PR), where a few extra
+    minutes doesn't block anyone's local `git commit`; run
+    `poetry run pytest -m "not slow"` manually before pushing for that
+    feedback sooner, accepting the ~10 minutes.
 
 ## Known rough edges / things to check before trusting results on real data
 
@@ -666,10 +745,10 @@ just skips the `poetry.lock` version pinning.
 
 ```bash
 poetry install --extras dev
-poetry run pytest             # forward-model unit tests + end-to-end MCMC
-                               # recovery test (tests/test_recovery.py, ~1-2 min --
-                               # the full suite, including the free-lag-mode
-                               # multi-chain recovery test, is more like 10 min)
+poetry run pytest             # full suite, ~15 min (see decision #16 for
+                               # why -- pytest -m "not slow" for ~2 min)
+poetry run pytest --cov=echofit --cov-report=term-missing  # + coverage
+poetry run pre-commit install  # one-time: run the fast subset on every commit
 poetry run python scripts/smoke_test.py  # quick visual check: fit + save
                                           # plots to smoke_test_output/report.html (~30-50s)
 poetry run jupyter notebook notebooks/demo.ipynb

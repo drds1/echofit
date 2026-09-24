@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --extras dev
+
+      # Full suite, no marker filter -- unlike the pre-commit hook's quick
+      # "not slow" pass, CI is the place the full/multi-chain MCMC recovery
+      # tests are actually meant to run (see README's "Tests and coverage").
+      # MPLBACKEND=Agg avoids a headless Tk-backend crash on some machines
+      # (see CLAUDE.md's rough-edges note).
+      - name: Run tests with coverage
+        env:
+          MPLBACKEND: Agg
+        run: >
+          poetry run pytest tests/
+          --cov=echofit --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml

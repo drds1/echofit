@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "jupyter", "ipykernel", "Pillow"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "pre-commit>=3.5", "jupyter", "ipykernel", "Pillow"]
 
 [project.urls]
 Homepage = "https://github.com/drds1/echofit"
@@ -47,3 +47,17 @@ include = ["echofit*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: full/multi-chain MCMC recovery tests -- excluded from the pre-commit hook's quick pass (`pytest -m \"not slow\"`), run in full by CI and `poetry run pytest` with no marker filter.",
+]
+
+[tool.coverage.run]
+source = ["echofit"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]

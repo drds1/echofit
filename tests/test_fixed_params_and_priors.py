@@ -37,6 +37,7 @@ def _build_physical_echofit(data, **kwargs):
     return ef
 
 
+@pytest.mark.slow
 def test_inclination_is_sampled_via_uniform_cos_inclination():
     ef = _build_physical_echofit(_physical_dataset())
     ef.fit(rng_seed=0, num_warmup=15, num_samples=15, progress_bar=False)
@@ -122,6 +123,7 @@ def test_init_strategy_disabled_for_multi_chain_fits():
     assert ef._init_strategy(num_chains=4) is None
 
 
+@pytest.mark.slow
 def test_resume_persists_and_restores_fixed_params(tmp_path):
     data = _physical_dataset()
     ef = EchoFit(M_BH=1.0e8, title="resume_fixed_test", output_dir=str(tmp_path), fixed_params={"inclination": 0.0})

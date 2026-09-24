@@ -129,7 +129,7 @@ def plot_raw_lightcurves(bands: Dict[str, dict], driver: Optional[dict] = None, 
             ecolor="0.2", alpha=0.85, capsize=3, elinewidth=1.2, capthick=1.2,
         )
         ax.set_ylabel("driver")
-        ax.grid(alpha=0.25)
+        ax.grid(alpha=0.6)
         axes = axes[1:]
 
     for ax, (name, d) in zip(axes, ordered):
@@ -138,7 +138,7 @@ def plot_raw_lightcurves(bands: Dict[str, dict], driver: Optional[dict] = None, 
             ecolor=colours[name], alpha=0.85, capsize=3, elinewidth=1.2, capthick=1.2,
         )
         ax.set_ylabel(f"{name}\n({d['wavelength']:.0f} \u00c5)")
-        ax.grid(alpha=0.25)
+        ax.grid(alpha=0.6)
 
     axes[-1].set_xlabel("time [days]")
     fig.suptitle("Raw multi-band light curves")
@@ -215,7 +215,7 @@ def plot_lightcurve_fits(
             ax_drv.legend(fontsize=7, loc="upper right")
         ax_drv.set_ylabel("driver\nX(t)")
         ax_drv.set_title("Inferred driving light curve", fontsize=10)
-        ax_drv.grid(alpha=0.25)
+        ax_drv.grid(alpha=0.6)
         ax_drv.sharex(axes[1, 0])
         ax_drv_unused.axis("off")
 
@@ -234,7 +234,7 @@ def plot_lightcurve_fits(
             ecolor="k", alpha=0.7, capsize=3, elinewidth=1.2, capthick=1.2, label="data",
         )
         ax_lc.set_ylabel(f"{name}\n({d['wavelength']:.0f} \u00c5)")
-        ax_lc.grid(alpha=0.25)
+        ax_lc.grid(alpha=0.6)
         if row == 0:
             ax_lc.legend(fontsize=8, ncol=2, loc="upper right")
 
@@ -244,7 +244,7 @@ def plot_lightcurve_fits(
         ax_psi.fill_between(tau_grid, plo68, phi68, color=colour, alpha=0.35)
         ax_psi.plot(tau_grid, pmed, color=colour, lw=1.5)
         ax_psi.set_ylabel(r"$\psi(\tau)$")
-        ax_psi.grid(alpha=0.25)
+        ax_psi.grid(alpha=0.6)
 
     axes[-1, 0].set_xlabel("time [days]")
     axes[-1, 1].set_xlabel(r"$\tau$ [days]")
@@ -322,7 +322,7 @@ def plot_power_spectrum(
     ax.set_yscale("log")
     ax.set_xlabel(r"$\omega$ [rad/day]")
     ax.set_ylabel(r"$P(\omega)$")
-    ax.grid(alpha=0.25, which="both")
+    ax.grid(alpha=0.6, which="both")
     ax.legend(fontsize=8)
     ax.set_title("Driver power spectrum: posterior vs. fitted DRW prior")
     fig.tight_layout()
@@ -364,7 +364,7 @@ def plot_mcmc_diagnostics(
         for c in range(n_chains):
             ax.plot(arr[c], lw=0.7, alpha=0.8, label=f"chain {c}" if len(param_names) == 1 else None)
         ax.set_ylabel(name, fontsize=9)
-        ax.grid(alpha=0.25)
+        ax.grid(alpha=0.6)
 
     axes[-1].set_xlabel("sample")
     fig.suptitle("MCMC trace diagnostics")
@@ -575,7 +575,7 @@ def plot_bof(potential_energy: np.ndarray, checkpoint_every: Optional[int] = Non
             ax.axvline(x, color="0.7", lw=0.6, zorder=0)
     ax.set_xlabel("sample")
     ax.set_ylabel("BOF (2 x potential energy)")
-    ax.grid(alpha=0.25)
+    ax.grid(alpha=0.6)
     if n_chains > 1:
         ax.legend(fontsize=8)
     ax.set_title("Badness of Fit vs. sample")

@@ -54,13 +54,16 @@ def estimate_dt_min(
     -------
     dt_min : float
     """
-    gaps = np.concatenate(
-        [np.diff(np.sort(np.asarray(t, float))) for t in t_arrays if len(t) > 1]
-    )
-    if gaps.size == 0:
+    # A plain np.concatenate([]) raises rather than returning a size-0
+    # array, so the "no bands have 2+ points" fallback below has to be
+    # checked on this list directly, before concatenating -- found via a
+    # coverage report showing that fallback as unreachable dead code (it
+    # crashed here first, for every t_arrays that should have hit it).
+    diffs = [np.diff(np.sort(np.asarray(t, float))) for t in t_arrays if len(t) > 1]
+    if not diffs:
         dt_min = t_span if t_span is not None else 1.0
     else:
-        dt_min = float(np.percentile(gaps, percentile))
+        dt_min = float(np.percentile(np.concatenate(diffs), percentile))
     if t_span is not None:
         dt_min = max(dt_min, floor_frac * t_span)
     return dt_min

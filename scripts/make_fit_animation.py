@@ -30,6 +30,10 @@ column is wider than the other two -- ``width_ratios``):
 * per band: its echo light curve (left) and response function psi(tau)
   (middle, x-axis capped at 30 days -- the response itself is always much
   narrower than the full lag grid it's evaluated on).
+* bottom: Badness-of-Fit (``2 * potential_energy``, matching
+  ``plotting.plot_bof``) vs. sample number, drawn as a growing trace that
+  extends one point per frame -- should trend down then flatten as the
+  chain converges.
 
 Every light-curve/psi panel (driver included) also shows 68%/95% credible
 envelopes, matching the shaded bands on the standard (non-animated)
@@ -37,7 +41,9 @@ envelopes, matching the shaded bands on the standard (non-animated)
 envelope only uses samples up to i, not the full run -- so it starts wide
 (next to no constraint from 1-2 samples) and narrows towards the converged
 posterior's own width as the chain accumulates more of them; see
-``_expanding_percentiles``.
+``_expanding_percentiles``. All light-curve/psi/BOF panels have gridlines
+(``alpha=0.6`` -- the matplotlib default ``alpha=0.25`` on its default grey
+turned out to be nearly invisible once actually rendered, not just subtle).
 
 Both disk panels are a genuinely simplified 2-D schematic, not a 3-D/
 raytraced render, and always use the viscous thin-disk profile for the
@@ -181,9 +187,11 @@ def main():
     )(log_mdot))  # (n_frames, n_r)
     T_grid_all = np.broadcast_to(T_per_r[:, :, None], (len(log_mdot_np), _DISK_N_R, _DISK_N_PHI))
 
+    bof = 2.0 * np.asarray(ef.extra_fields["potential_energy"])
+
     n_bands = len(ef.bands)
     fig, axes = plt.subplots(
-        n_bands + 1, 3, figsize=(13, 1.8 * (n_bands + 1)),
+        n_bands + 2, 3, figsize=(13, 1.8 * (n_bands + 2)),
         gridspec_kw={"width_ratios": [3, 1, 1]},
     )
 
@@ -192,6 +200,7 @@ def main():
     ax_drv.set_ylim(driver_samples.min() - y_pad, driver_samples.max() + y_pad)
     ax_drv.set_ylabel("driver X(t)")
     ax_drv.set_title("Driving light curve", fontsize=9)
+    ax_drv.grid(alpha=0.6)
     (driver_line,) = ax_drv.plot([], [], color="black", lw=1.5)
 
     # -- disk-temperature panel: fixed face-on geometry, colour-only updates --
@@ -231,6 +240,7 @@ def main():
         pad = 0.15 * (y.max() - y.min())
         ax_lc.set_ylim(min(y.min(), d["y"].min()) - pad, max(y.max(), d["y"].max()) + pad)
         ax_lc.set_ylabel(f"{name} ({d['wavelength']:.0f} Å)")
+        ax_lc.grid(alpha=0.6)
         (band_lines[name],) = ax_lc.plot([], [], color=colour, lw=1.5, zorder=2)
         ax_lc.sharex(ax_drv)
 
@@ -238,13 +248,28 @@ def main():
         ax_psi.set_ylim(0.0, 1.05 * psi.max())
         ax_psi.set_xlim(0.0, _PSI_XLIM_DAYS)
         ax_psi.set_ylabel(f"{name}\nψ(τ)")
+        ax_psi.grid(alpha=0.6)
         (psi_lines[name],) = ax_psi.plot([], [], color=colour, lw=1.5)
         if row > 1:
             ax_psi.sharex(axes[1, 1])
 
-    axes[-1, 0].set_xlabel("time (days)")
-    axes[-1, 1].set_xlabel("lag τ (days)")
+    axes[n_bands, 0].set_xlabel("time (days)")
+    axes[n_bands, 1].set_xlabel("lag τ (days)")
     ax_drv.set_xlim(float(t_fine.min()), float(t_fine.max()))
+
+    # -- Badness-of-Fit panel: a growing trace, one more point per frame --
+    ax_bof, ax_bof_unused1, ax_bof_unused2 = axes[-1, 0], axes[-1, 1], axes[-1, 2]
+    ax_bof_unused1.axis("off")
+    ax_bof_unused2.axis("off")
+    ax_bof.set_xlim(1, args.num_frames)
+    bof_pad = 0.05 * (bof.max() - bof.min())
+    ax_bof.set_ylim(bof.min() - bof_pad, bof.max() + bof_pad)
+    ax_bof.set_xlabel("sample")
+    ax_bof.set_ylabel("BOF\n(2 × potential energy)")
+    ax_bof.set_title("Badness of Fit", fontsize=9)
+    ax_bof.grid(alpha=0.6)
+    (bof_line,) = ax_bof.plot([], [], color="0.2", lw=1.2)
+
     title = fig.suptitle("")
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
 
@@ -255,6 +280,7 @@ def main():
         for name in ef.bands:
             band_lines[name].set_data(t_fine, y_by_band[name][i])
             psi_lines[name].set_data(tau_grid_np, psi_by_band[name][i])
+        bof_line.set_data(np.arange(1, i + 2), bof[: i + 1])
         title.set_text(f"MCMC sample {i + 1}/{args.num_frames}")
 
         # 68%/95% credible envelopes, expanding-window over samples seen so
@@ -280,7 +306,7 @@ def main():
         dx, dy = L * np.sin(incl_rad), L * np.cos(incl_rad)
         disk_line.set_data([-dx, dx], [-dy, dy])
 
-        return [driver_line, title, disk_mesh, disk_title, disk_line,
+        return [driver_line, title, disk_mesh, disk_title, disk_line, bof_line,
                 *band_lines.values(), *psi_lines.values(), *envelope_artists]
 
     ani = FuncAnimation(fig, update, frames=args.num_frames, blit=False)

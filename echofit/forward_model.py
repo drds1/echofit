@@ -239,21 +239,46 @@ def _schwarzschild_radius_light_days(M_BH):
     return 2.0 * r_g_m / _LIGHT_DAY_M
 
 
+def _viscous_t4_shape(r_safe, tau_ref, r_in, viscous_slope):
+    """Shakura-Sunyaev viscous ``T**4(r)``, shape-only (normalised to 1 at
+    ``r = tau_ref``, the Wien radius) -- the one formula shared by
+    :func:`disk_temperature_profile` and :func:`thin_disk_response`'s
+    viscous term, so it exists in exactly one place.
+
+    Takes ``tau_ref``/``r_in`` as plain values (not ``log_mdot``/
+    ``wavelength``/``M_BH``) since both callers already compute those for
+    other reasons of their own; takes ``r_safe`` already clipped by the
+    caller rather than clipping internally, since the two callers need
+    genuinely different clipping strategies at ``r <= r_in`` --
+    ``thin_disk_response`` needs a smooth, differentiable-in-inclination
+    cutoff (its ``r_star`` depends on a sampled parameter, handled via a
+    separate sigmoid mask applied to its result) where a hard clip would
+    reintroduce the zero-gradient trap documented on that mask;
+    :func:`disk_temperature_profile` doesn't sample ``r``, so a plain hard
+    clip at ``r_in`` is fine and simpler there.
+    """
+    visc_inner_term = (1.0 - jnp.sqrt(r_in / r_safe)) / jnp.clip(
+        1.0 - jnp.sqrt(r_in / tau_ref), 1e-6, None
+    )
+    return (tau_ref / r_safe) ** (4.0 * viscous_slope) * visc_inner_term
+
+
 def disk_temperature_profile(r, log_mdot, wavelength, M_BH, viscous_slope: float = 0.75):
     """Axisymmetric Shakura-Sunyaev viscous disk temperature (Kelvin) as a
     function of radius ``r`` (light-days).
 
-    Deliberately mirrors ``thin_disk_response``'s own internal ``t4_visc``/
-    Wien's-law computation (same formula, same reference point) rather than
-    the two sharing code, since ``thin_disk_response`` evaluates on a 2-D
-    ``(tau, phi)`` grid via the disk's light-travel-time surface, not a
-    plain radius -- this is for callers that just want "the temperature at
-    radius r" directly, e.g. a disk visualisation (see
-    ``scripts/make_fit_animation.py``), independent of any particular
-    response-function evaluation. Ignores the optional lamppost-irradiation
-    term (``thin_disk_response``'s ``include_irradiation``), which is
-    azimuthally asymmetric and not meaningful for a purely radius-dependent
-    profile.
+    Shares its actual formula with ``thin_disk_response``'s viscous term
+    via :func:`_viscous_t4_shape` (only the clipping-at-the-ISCO and
+    irradiation-mixing steps around it differ, per-caller -- see that
+    function's docstring), rather than the two duplicating it, since
+    ``thin_disk_response`` evaluates on a 2-D ``(tau, phi)`` grid via the
+    disk's light-travel-time surface, not a plain radius -- this is for
+    callers that just want "the temperature at radius r" directly, e.g. a
+    disk visualisation (see ``scripts/make_fit_animation.py``), independent
+    of any particular response-function evaluation. Ignores the optional
+    lamppost-irradiation term (``thin_disk_response``'s
+    ``include_irradiation``), which is azimuthally asymmetric and not
+    meaningful for a purely radius-dependent profile.
 
     Parameters
     ----------
@@ -269,10 +294,7 @@ def disk_temperature_profile(r, log_mdot, wavelength, M_BH, viscous_slope: float
     tau_ref = lag_scaling(log_mdot, wavelength, M_BH)
     r_in = 3.0 * _schwarzschild_radius_light_days(M_BH)
     r_safe = jnp.clip(r, r_in, None)
-    visc_inner_term = (1.0 - jnp.sqrt(r_in / r_safe)) / jnp.clip(
-        1.0 - jnp.sqrt(r_in / tau_ref), 1e-6, None
-    )
-    t4_shape = (tau_ref / r_safe) ** (4.0 * viscous_slope) * visc_inner_term
+    t4_shape = _viscous_t4_shape(r_safe, tau_ref, r_in, viscous_slope)
     t_ref_kelvin = _WIEN_B_ANGSTROM_KELVIN / wavelength
     return t_ref_kelvin * jnp.clip(t4_shape, 1e-12, None) ** 0.25
 
@@ -478,11 +500,9 @@ def thin_disk_response(
     r_star = tau_pos[:, None] / denom[None, :]  # (n_tau, n_phi)
     r_star_safe = jnp.clip(r_star, 1e-12, None)
 
-    # T**4(r), shape-only (normalised to 1 at r = tau_ref, the Wien radius).
-    visc_inner_term = (1.0 - jnp.sqrt(r_in / r_star_safe)) / jnp.clip(
-        1.0 - jnp.sqrt(r_in / tau_ref), 1e-6, None
-    )
-    t4_visc = (tau_ref / r_star_safe) ** (4.0 * viscous_slope) * visc_inner_term
+    # T**4(r), shape-only (normalised to 1 at r = tau_ref, the Wien radius) --
+    # shared with disk_temperature_profile, see _viscous_t4_shape.
+    t4_visc = _viscous_t4_shape(r_star_safe, tau_ref, r_in, viscous_slope)
     if include_irradiation:
         x_star = jnp.sqrt(r_star_safe ** 2 + hx ** 2)
         x_ref = jnp.sqrt(tau_ref ** 2 + hx ** 2)

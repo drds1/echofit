@@ -20,6 +20,7 @@ within their prior support rather than close to truth.
 """
 
 import numpy as np
+import pytest
 
 from echofit.synthetic import generate_synthetic_dataset
 from echofit.echofit import EchoFit
@@ -58,6 +59,7 @@ def _fit_synthetic(seed: int):
     return ef, data
 
 
+@pytest.mark.slow
 def test_mcmc_recovers_synthetic_truth():
     ef, data = _fit_synthetic(seed=2)
     truth = data["truth"]

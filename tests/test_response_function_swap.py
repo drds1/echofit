@@ -11,6 +11,7 @@ from, silently producing a plot inconsistent with the actual fit.
 
 import numpy as np
 import jax.numpy as jnp
+import pytest
 
 import echofit.model as model_mod
 from echofit.forward_model import lag_scaling
@@ -66,6 +67,7 @@ def _kurtosis(psi, tau_grid):
     return fourth / var ** 2
 
 
+@pytest.mark.slow
 def test_swapping_model_response_function_is_reflected_in_the_plot():
     original = model_mod.response_function
     try:
