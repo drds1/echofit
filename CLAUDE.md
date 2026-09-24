@@ -483,6 +483,47 @@ and package layout.
     observer and its dashed sightline are drawn once and never move.
     Both remain a simplified 2-D schematic, not a 3-D/raytraced render.
 
+    **Every band/driver panel also shows an expanding-window 68%/95%
+    credible envelope** (`_expanding_percentiles`): frame `i`'s envelope
+    is the percentiles of samples `0..i` only, not the full run, so it
+    starts at zero width (one sample has no spread), can widen as the
+    chain starts genuinely exploring, and narrows towards the converged
+    posterior's own width as more samples dilute the influence of any
+    early, still-unconverged ones -- the same shaded-band convention as
+    the standard (non-animated) `plot_lightcurve_fits`, just computed
+    cumulatively per frame instead of once over the whole chain. Percentiles
+    of a samples-so-far prefix are mathematically bounded by the full run's
+    own min/max, so the existing axis limits (set from the full arrays)
+    already contain every frame's envelope with no extra padding needed.
+    `fill_between` has no in-place update method, so these artists are
+    removed and redrawn every frame (unlike the disk-temperature mesh's
+    `set_array`).
+
+    **Bands are coloured by real-world wavelength
+    (`plotting.wavelength_to_colour`), not an arbitrary per-plot palette,
+    in both this animation and every standard light-curve plot
+    (`plot_raw_lightcurves`/`plot_lightcurve_fits`) -- another direct user
+    request.** X-ray (< 100 A) black, UV (100-3800 A) a strong violet,
+    the visible range (3800-7500 A) its actual approximate spectral
+    colour (`_visible_wavelength_to_rgb`, the standard Bruton-style
+    piecewise-linear wavelength-to-RGB approximation), and IR and beyond
+    (> 7500 A) a reddish colour -- matching the lamppost picture of a
+    short-wavelength driver reprocessed into progressively redder bands
+    further out in the disk. The driving light curve's own line is plain
+    `"black"` throughout, consistent with "X-ray driving light curves are
+    black" regardless of whether a real driver light curve was registered.
+    `_band_colours`'s old behaviour (a `plasma_r` colormap normalised to
+    whatever wavelength range happened to be in the current fit) is gone
+    entirely -- colours are now absolute and comparable across different
+    fits/reports, not just internally consistent within one.
+
+    **Higher resolution (`--dpi`, default 150, was a fixed 80) after a
+    direct "looks blurry when zoomed in" correction** -- also bumps the
+    committed GIF from ~3-4MB to ~10MB; accepted as the direct cost of
+    that request rather than silently re-compressed back down, since
+    colour-count reduction was checked and barely helps (96 to 64 colours
+    saved well under 1MB) without visibly hurting the smooth gradients.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model
