@@ -1,7 +1,11 @@
 # echofit
 
-Bayesian modelling of AGN reverberation-mapping light curves as a delayed,
-smoothed echo of an unobserved driving (lamppost) X-ray light curve, built on
+`echofit` fits brightness variations observed in an active galactic nucleus
+(AGN) at different wavelengths to work out how far each waveband's
+emitting region sits from the black hole, by measuring the time delay
+between them. In the field's own terms: Bayesian modelling of AGN
+reverberation-mapping light curves as a delayed, smoothed echo of an
+unobserved driving (lamppost) X-ray light curve, built on
 [JAX](https://github.com/google/jax) + [NumPyro](https://num.pyro.ai/).
 
 ## Contents
