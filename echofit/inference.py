@@ -14,8 +14,11 @@ import jax
 from numpyro.infer import MCMC, NUTS
 
 
-def _build_kernel(model: Callable, target_accept_prob: float, max_tree_depth: Optional[int], init_strategy=None):
-    nuts_kwargs = dict(target_accept_prob=target_accept_prob)
+def _build_kernel(
+    model: Callable, target_accept_prob: float, max_tree_depth: Optional[int],
+    init_strategy=None, dense_mass: bool = False,
+):
+    nuts_kwargs = dict(target_accept_prob=target_accept_prob, dense_mass=dense_mass)
     if max_tree_depth is not None:
         nuts_kwargs["max_tree_depth"] = max_tree_depth
     if init_strategy is not None:
@@ -35,6 +38,7 @@ def run_mcmc(
     chain_method: str = "parallel",
     progress_bar: bool = True,
     init_strategy=None,
+    dense_mass: bool = False,
 ) -> MCMC:
     """Run NUTS on ``model(**model_kwargs)`` and return the fitted MCMC object.
 
@@ -58,6 +62,21 @@ def run_mcmc(
         can spend most samples at that ceiling; lowering this bounds the
         worst-case per-sample cost at the expense of exploration efficiency.
         Left as NumPyro's default when not given.
+    dense_mass : bool
+        Use a full covariance-based mass matrix (estimated during warmup)
+        instead of NumPyro's default diagonal one. See
+        ``scripts/profile_pipeline.py``'s docstring and CLAUDE.md decision
+        #17: this model's parameters are correlated enough that a diagonal
+        mass matrix makes NUTS spend nearly every sample pinned at
+        ``max_tree_depth``'s ceiling (confirmed directly: mean ~858 leapfrog
+        steps/sample, essentially always at or near 1023); ``dense_mass=True``
+        cut that ~7.5x (to ~114 steps/sample) with no loss of recovery
+        accuracy, at the cost of needing a longer warmup for the (much
+        larger, O(P^2) vs O(P)) mass matrix to adapt properly -- a
+        short-warmup dense-mass run showed a real divergence rate (6%) that
+        a longer warmup brought back down to a healthy 1.5%. Off by default
+        to keep existing behaviour unchanged; worth turning on for any
+        run where the sampling phase dominates wall time (most real runs).
     chain_method : str
         ``"parallel"`` (NumPyro's default, one process/device per chain),
         ``"vectorized"`` (batch chains via ``vmap`` on a single device --
@@ -80,7 +99,7 @@ def run_mcmc(
         Badness-of-Fit trace (``plotting.plot_bof``), and
         ``mcmc.print_summary()`` / ``arviz`` for diagnostics.
     """
-    kernel = _build_kernel(model, target_accept_prob, max_tree_depth, init_strategy)
+    kernel = _build_kernel(model, target_accept_prob, max_tree_depth, init_strategy, dense_mass)
     mcmc = MCMC(
         kernel,
         num_warmup=num_warmup,
@@ -110,6 +129,7 @@ def run_mcmc_chunked(
     n_already_done: int = 0,
     on_chunk_done: Optional[Callable] = None,
     init_strategy=None,
+    dense_mass: bool = False,
 ):
     """Run NUTS in checkpointable chunks of up to ``checkpoint_every`` samples
     each, single chain only. Resumes from ``init_last_state`` (a previous
@@ -145,7 +165,7 @@ def run_mcmc_chunked(
 
     while n_done < num_samples:
         this_chunk = min(checkpoint_every, num_samples - n_done)
-        kernel = _build_kernel(model, target_accept_prob, max_tree_depth, init_strategy)
+        kernel = _build_kernel(model, target_accept_prob, max_tree_depth, init_strategy, dense_mass)
         mcmc = MCMC(
             kernel,
             num_warmup=0 if last_state is not None else num_warmup,

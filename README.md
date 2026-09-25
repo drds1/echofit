@@ -44,6 +44,7 @@ Regenerate with `python scripts/make_fit_animation.py`.*
   - [🐍 From Python directly](#-from-python-directly)
 - [🧪 Visual smoke test](#-visual-smoke-test)
 - [✅ Tests and coverage](#-tests-and-coverage)
+- [⏱️ Performance profiling](#-performance-profiling)
 - [🔄 Swapping the response function](#-swapping-the-response-function)
 - [🌈 Emission-line / free-lag mode and driver light curves](#-emission-line--free-lag-mode-and-driver-light-curves)
 - [⚠️ Status / caveats](#-status--caveats)
@@ -549,6 +550,37 @@ branch nobody else is using yet).
 suite with coverage on every push to `main` and every pull request --
 this, not a local hook, is where tests actually run automatically, since
 it's the place the slow tests actually get run automatically.
+
+## ⏱️ Performance profiling
+
+For a one-off snapshot of where wall time actually goes in the pipeline,
+split into **one-off costs** (grid building, the thin-disk fast response's
+template table build, NUTS's JIT-compile+warmup, report generation --
+fixed, however long you fit for) versus **per-iteration costs** (each
+response-function family's per-call cost, the closed-form convolution
+step, a full-model potential-energy/gradient evaluation, and NUTS's own
+measured per-sample cost -- these are what actually determine how a long
+run scales):
+
+```bash
+python scripts/profile_pipeline.py                    # a few minutes
+python scripts/profile_pipeline.py --outdir /tmp/echofit_profile
+```
+
+Every per-call timing is measured under `jax.jit`, not eager Python -- see
+`CLAUDE.md` decision #9 for why an eager measurement here would badly
+mislead (a ~50x gap was found between the two for `thin_disk_response`).
+Writes two charts (`one_off_costs.png`, `per_iteration_costs.png`), a
+machine-readable `results.json`, and a `report.html` tying them together to
+`profiling_output/` (gitignored: this is a snapshot to regenerate, not
+something to keep committed and let go stale).
+
+**What this actually found**: every forward-model component is
+sub-millisecond, so the real per-iteration cost is almost entirely NUTS
+itself running long leapfrog trajectories, and `EchoFit.fit(dense_mass=True)`
+cuts that ~7.5x at no loss of recovery accuracy -- see `CLAUDE.md` decision
+#17 for the full investigation and the warmup-length tradeoff that comes
+with it.
 
 ## 🔄 Swapping the response function
 

@@ -424,6 +424,7 @@ class EchoFit:
         num_samples=_UNSET,
         num_chains: int = 1,
         max_tree_depth=_UNSET,
+        dense_mass=_UNSET,
         chain_method: str = "parallel",
         checkpoint_every=_UNSET,
         report_every: Optional[int] = None,
@@ -445,6 +446,21 @@ class EchoFit:
         posterior (as ``chains.nc``, an ArviZ ``InferenceData``) and (if
         ``generate_report``) the same plots + report.html as
         ``scripts/smoke_test.py`` to the run directory.
+
+        dense_mass : bool, optional
+            Use a full covariance-based NUTS mass matrix instead of the
+            default diagonal one -- see ``inference.run_mcmc``'s docstring
+            and ``CLAUDE.md`` decision #17. Worth turning on for most real
+            runs: this model's parameters are correlated enough that the
+            default diagonal mass matrix makes NUTS spend nearly every
+            sample pinned at ``max_tree_depth``'s ceiling, ~7.5x more
+            leapfrog steps per sample than with ``dense_mass=True``, at no
+            cost to recovery accuracy. It does need a longer ``num_warmup``
+            than the default to adapt properly (the covariance matrix has
+            many more entries to estimate than a diagonal one) -- a
+            too-short warmup showed a real (if modest) rise in divergent
+            transitions; check ``ef.extra_fields["diverging"]`` and
+            increase ``num_warmup`` if it's above a few percent.
 
         report_every : int, optional
             Only used on the checkpointed path. If given, ``report.html``
@@ -471,12 +487,13 @@ class EchoFit:
             num_warmup = 1000 if num_warmup is _UNSET else num_warmup
             num_samples = 1000 if num_samples is _UNSET else num_samples
             max_tree_depth = None if max_tree_depth is _UNSET else max_tree_depth
+            dense_mass = False if dense_mass is _UNSET else dense_mass
             rng_key = jax.random.PRNGKey(rng_seed)
             self.mcmc = run_mcmc(
                 reverberation_model, self._model_kwargs(), rng_key,
                 num_warmup=num_warmup, num_samples=num_samples, num_chains=num_chains,
                 max_tree_depth=max_tree_depth, chain_method=chain_method, progress_bar=progress_bar,
-                init_strategy=self._init_strategy(num_chains),
+                init_strategy=self._init_strategy(num_chains), dense_mass=dense_mass,
             )
             self.samples = self.mcmc.get_samples()
             self._samples_by_chain = self.mcmc.get_samples(group_by_chain=True)
@@ -502,6 +519,7 @@ class EchoFit:
         num_warmup = _pick(num_warmup, "num_warmup", 1000)
         num_samples = _pick(num_samples, "num_samples", 1000)
         max_tree_depth = _pick(max_tree_depth, "max_tree_depth", None)
+        dense_mass = _pick(dense_mass, "dense_mass", False)
         checkpoint_every = _pick(checkpoint_every, "checkpoint_every", 100)
 
         if self.run_dir is None:
@@ -527,7 +545,7 @@ class EchoFit:
             prev_samples, prev_extra, n_already_done = {}, {}, 0
             self._fit_config = dict(
                 rng_seed=rng_seed, num_warmup=num_warmup, num_samples=num_samples,
-                max_tree_depth=max_tree_depth, checkpoint_every=checkpoint_every,
+                max_tree_depth=max_tree_depth, dense_mass=dense_mass, checkpoint_every=checkpoint_every,
             )
             if not manifest_path.exists():
                 run_manager.save_bands_npz(self.run_dir / "data.npz", self.bands)
@@ -576,6 +594,7 @@ class EchoFit:
             max_tree_depth=max_tree_depth, progress_bar=progress_bar,
             init_last_state=init_last_state, n_already_done=n_already_done,
             on_chunk_done=_on_chunk_done, init_strategy=self._init_strategy(),
+            dense_mass=dense_mass,
         )
         fit_seconds = time.time() - t0
 

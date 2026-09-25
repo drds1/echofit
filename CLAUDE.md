@@ -647,6 +647,40 @@ and package layout.
     `poetry run pytest -m "not slow"` manually before pushing for that
     feedback sooner, accepting the ~10 minutes.
 
+17. **`dense_mass=True` (a NUTS kernel option, now exposed on `EchoFit.fit()`) is the single
+    highest-leverage, accuracy-preserving speed lever found so far, discovered directly from
+    `scripts/profile_pipeline.py`'s own numbers, not guessed.** That script's per-iteration chart showed
+    every individual forward-model component (response function, `transfer_coeffs`+`compute_echo`,
+    potential-energy eval/grad) costing well under a millisecond, while NUTS's own measured per-sample cost
+    was ~47ms, a ~120x gap that only makes sense if a single NUTS sample is taking on the order of 100+
+    leapfrog steps. Checked directly against NUTS's own `num_steps` extra field (not inferred, measured):
+    with the default diagonal mass matrix, this model's NUTS chain spends essentially every sample pinned at
+    `max_tree_depth`'s default ceiling (2^10-1 = 1023 steps) -- mean 857.9, median exactly 1023, minimum 511,
+    with **zero divergences**. That "maxed-out trajectory length with zero divergences" pattern is the
+    textbook signature of NUTS being cut off by the step budget before it can find a genuine U-turn, not
+    genuinely difficult/multimodal geometry -- exactly the kind of correlated-parameter geometry a diagonal
+    mass matrix (which only rescales each parameter independently) can't correct for, but a full
+    covariance-based one can.
+
+    `dense_mass=True` on NumPyro's `NUTS` kernel (estimates a full covariance matrix during warmup instead of
+    per-parameter variances) fixed it directly: mean leapfrog steps per sample dropped **~7.5x** (857.9 ->
+    113.6), with `log_mdot` recovery unchanged (if anything marginally tighter: posterior std 0.023 ->
+    0.021). The one real cost is that a dense mass matrix has O(P^2) entries to estimate during warmup
+    instead of O(P), so it needs more warmup than the default to adapt properly -- confirmed directly: 200
+    warmup samples gave a real, if modest, divergence rate (12/200, 6%), which 800 warmup samples brought
+    down to a healthy 1.5% (3/200) with the same steps-per-sample improvement. This is a warmup-phase
+    (one-off) cost, not a per-sample (recurring) one, so it doesn't erode the wall-time win on any run long
+    enough for the sampling phase to dominate, which `scripts/profile_pipeline.py`'s own pipeline breakdown
+    shows is true for any run past a few hundred samples.
+
+    Off by default (`dense_mass=False`) to keep existing behaviour/results reproducible for anyone already
+    relying on it; exposed as a plain passthrough on `EchoFit.fit()` (both the in-memory and `title=`
+    checkpointed paths -- persisted in the checkpointed path's `_fit_config`/`manifest.json` the same way
+    `max_tree_depth` already was, so a resumed run keeps using it rather than silently reverting to diagonal
+    partway through) and on `scripts/fit_lightcurves.py`'s `--dense-mass` flag. Not applied automatically,
+    because the extra warmup it needs is a real, user-facing tradeoff (more warmup samples means more one-off
+    wall time before sampling starts) that's better left as an explicit choice than a silent default change.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model
@@ -751,6 +785,10 @@ poetry run pytest --cov=echofit --cov-report=term-missing  # + coverage
 poetry run pre-commit install  # one-time: run the fast subset on every commit
 poetry run python scripts/smoke_test.py  # quick visual check: fit + save
                                           # plots to smoke_test_output/report.html (~30-50s)
+poetry run python scripts/profile_pipeline.py  # one-off perf snapshot: where
+                                                # wall time goes across the whole
+                                                # pipeline -> profiling_output/
+                                                # (gitignored, ~a few minutes)
 poetry run jupyter notebook notebooks/demo.ipynb
 ```
 

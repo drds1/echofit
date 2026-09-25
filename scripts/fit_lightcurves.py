@@ -100,6 +100,17 @@ def _parse_args():
     parser.add_argument("--num-chains", type=int, default=1, help="Ignored (forced to 1) when --title is given -- see CLAUDE.md decision #6.")
     parser.add_argument("--chain-method", default="parallel", choices=("parallel", "vectorized", "sequential"))
     parser.add_argument("--max-tree-depth", type=int, default=None)
+    parser.add_argument(
+        "--dense-mass", action="store_true",
+        help=(
+            "Use a full covariance-based NUTS mass matrix instead of the default "
+            "diagonal one -- see CLAUDE.md decision #17. Worth trying for most "
+            "real runs (found to cut leapfrog steps per sample ~7.5x at no cost "
+            "to recovery accuracy), but needs a longer --num-warmup to adapt "
+            "properly; check the report's divergence count and raise --num-warmup "
+            "if it's above a few percent."
+        ),
+    )
     parser.add_argument("--rng-seed", type=int, default=0)
     parser.add_argument("--checkpoint-every", type=int, default=100, help="Only used with --title.")
     parser.add_argument("--report-every", type=int, default=None, help="Only used with --title -- refresh report.html every this many new samples.")
@@ -153,6 +164,7 @@ def main():
         num_chains=args.num_chains,
         chain_method=args.chain_method,
         max_tree_depth=args.max_tree_depth,
+        dense_mass=args.dense_mass,
         checkpoint_every=args.checkpoint_every,
         report_every=args.report_every,
         progress_bar=not args.no_progress_bar,
