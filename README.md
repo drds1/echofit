@@ -515,8 +515,7 @@ Everything above uses synthetic data. **`scripts/run_ngc5548_fit.sh`** is
 the same command-file pattern applied to a real dataset: NGC 5548's AGN
 STORM continuum monitoring campaign (Fausnaugh, Denney, Barth, et al.
 2016, ApJ 821, 56, "Space Telescope and Optical Reverberation Mapping
-Project III" -- D. Starkey is a co-author), downloaded directly from
-VizieR (catalog
+Project III"), downloaded directly from VizieR (catalog
 [J/ApJ/821/56](https://cdsarc.cds.unistra.fr/viz-bin/ReadMe/J/ApJ/821/56)).
 Run it directly:
 
@@ -549,12 +548,17 @@ coefficients -- benefits from it the same way the synthetic benchmarks in
 `CLAUDE.md` decision #17 do); expect this one to take a while. **Step 4**
 resumes it, the same pattern as `run_example_fit.sh`.
 
-**On `M_BH`**: NGC 5548's black hole mass is genuinely uncertain across
-the literature (the campaign itself caught NGC 5548 in an unusual
-"BLR holiday" state) -- the script's example uses `5e7` solar masses (a
-commonly cited classic value), not a recommendation. Check the current
-literature and pick a value deliberately, the same way you would for any
-of your own real data.
+**On `M_BH`**: the two STORM papers this workflow is built around don't
+even agree with each other -- Fausnaugh et al. 2016 (Paper III, the
+continuum light curves used here) adopts `5e7` solar masses (Bentz &
+Katz 2015), while Starkey et al. 2017 (Paper VI, "Reverberating Disk
+Models for NGC 5548", the CREAM-based disk-reprocessing fit this whole
+package is directly descended from) adopts `10**7.51` solar masses
+(~`3.24e7`, from Pancoast et al. 2014). The script and command file
+default to the Paper VI value, since it's the directly comparable
+disk-reprocessing analysis, but pass your own `--m-bh` if you'd rather
+use Paper III's or a more recent estimate -- check the current literature
+before trusting either.
 
 ## 🧪 Visual smoke test
 

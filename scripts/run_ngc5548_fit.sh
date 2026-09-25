@@ -4,9 +4,9 @@
 #
 # A worked, runnable example of echofit applied to a *real* AGN light
 # curve dataset: NGC 5548's AGN STORM continuum monitoring campaign
-# (Fausnaugh, Denney, Barth, et al. 2016, ApJ 821, 56 -- D. Starkey is a
-# co-author), downloaded directly from VizieR (catalog J/ApJ/821/56). See
-# README.md's "Real-data worked example" section for the full story.
+# (Fausnaugh, Denney, Barth, et al. 2016, ApJ 821, 56), downloaded
+# directly from VizieR (catalog J/ApJ/821/56). See README.md's
+# "Real-data worked example" section for the full story.
 #
 # Real data is slower than the synthetic examples elsewhere in this repo:
 # 13 bands, ~2200 data points total, real (irregular, gappy) cadence, from
@@ -38,12 +38,14 @@ ls -l ngc5548_storm_data/
 # Step 2: a quick look first -- 4 bands spanning the wavelength range
 # (UV, u, g, z), a purely in-memory fit, no checkpointing.
 #
-#   --m-bh        NGC 5548's black hole mass is genuinely uncertain across
-#                 the literature (the campaign caught it in an unusual
-#                 "BLR holiday" state) -- ~5e7 Msun here is a commonly
-#                 cited classic value, not a recommendation; check the
-#                 current literature and adjust if you have a preferred
-#                 estimate.
+#   --m-bh        Fausnaugh et al. 2016 (Paper III, this data's own paper)
+#                 adopts 5e7 Msun (Bentz & Katz 2015); Starkey et al. 2017
+#                 (Paper VI, "Reverberating Disk Models for NGC 5548", the
+#                 CREAM disk-reprocessing fit this package is directly
+#                 descended from) adopts 10**7.51 Msun (~3.236e7, from
+#                 Pancoast et al. 2014). Using the Paper VI value below,
+#                 since it's the directly comparable analysis; check the
+#                 current literature before trusting either.
 #   --dense-mass  worth it for a model this size (13 bands' worth of
 #                 S_band/C_band, plus the driver's own Fourier
 #                 coefficients) -- see CLAUDE.md decision #17.
@@ -51,7 +53,7 @@ ls -l ngc5548_storm_data/
 echo
 echo "== Step 2: quick 4-band look (no checkpointing) =="
 $RUN_PY scripts/fit_lightcurves.py \
-    --m-bh 5e7 \
+    --m-bh 3.236e7 \
     --band uv1158 1157.5 ngc5548_storm_data/uv1158_band.txt \
     --band u 3472 ngc5548_storm_data/u_band.txt \
     --band g 4776 ngc5548_storm_data/g_band.txt \
@@ -72,7 +74,7 @@ echo
 echo "== Step 3: full 13-band managed fit (this is the slow one) =="
 $RUN_PY scripts/fit_lightcurves.py \
     --title ngc5548_storm \
-    --m-bh 5e7 \
+    --m-bh 3.236e7 \
     --band uv1158 1157.5 ngc5548_storm_data/uv1158_band.txt \
     --band uv1367 1367.0 ngc5548_storm_data/uv1367_band.txt \
     --band uv1479 1478.5 ngc5548_storm_data/uv1479_band.txt \

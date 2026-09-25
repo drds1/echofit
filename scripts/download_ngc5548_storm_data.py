@@ -5,10 +5,10 @@ download_ngc5548_storm_data.py
 Downloads the real NGC 5548 AGN STORM continuum light curves from VizieR
 (catalog J/ApJ/821/56, Fausnaugh, Denney, Barth, et al. 2016, ApJ 821, 56,
 "Space Telescope and Optical Reverberation Mapping Project III: Optical
-Continuum Emission and Broadband Time Delays in NGC 5548" -- D. Starkey is
-a co-author) and reshapes them into the ``t y yerr`` per-band text files
-``scripts/fit_lightcurves.py`` reads, the same format
-``scripts/make_example_data.py`` writes for synthetic data.
+Continuum Emission and Broadband Time Delays in NGC 5548") and reshapes
+them into the ``t y yerr`` per-band text files ``scripts/fit_lightcurves.py``
+reads, the same format ``scripts/make_example_data.py`` writes for
+synthetic data.
 
 13 bands total: 9 ground-based optical filters (Johnson/Cousins BVRI, SDSS
 ugriz, table3.dat) plus 4 HST/COS UV continuum windows (1157.5, 1367,
@@ -49,6 +49,18 @@ OPTICAL_WAVELENGTHS = {
 }
 # table4.dat's own 4 discrete HST/COS continuum windows (Angstrom).
 UV_BAND_NAMES = {1157.5: "uv1158", 1367.0: "uv1367", 1478.5: "uv1479", 1746.0: "uv1746"}
+
+# The two STORM papers most directly relevant here don't agree with each
+# other: Fausnaugh et al. 2016 (Paper III, the continuum light curves used
+# below) adopts 5e7 Msun (Bentz & Katz 2015); Starkey et al. 2017 (Paper
+# VI, "Reverberating Disk Models for NGC 5548", the CREAM-based disk-
+# reprocessing fit this package is directly descended from) adopts
+# 10**7.51 Msun (~3.24e7, from Pancoast et al. 2014). Default to Paper
+# VI's value here, since it's the directly comparable disk-reprocessing
+# analysis -- pass your own --m-bh to fit_lightcurves.py if you'd rather
+# use Paper III's or a more recent literature estimate.
+M_BH_STARKEY_STORM_VI = 10 ** 7.51  # solar masses, Pancoast et al. 2014
+M_BH_FAUSNAUGH_STORM_III = 5.0e7  # solar masses, Bentz & Katz 2015
 
 
 def _download(name: str, raw_dir: Path) -> Path:
@@ -130,15 +142,15 @@ def main():
     )
     print(f"\nWrote {len(bands)} band files to {args.outdir}/")
     print(
-        "\nNGC 5548's black hole mass varies noticeably across the literature "
-        "(the campaign itself caught NGC 5548 in an unusual 'BLR holiday' state) "
-        "-- commonly cited values range from ~5e7 Msun (classic single-epoch/RM "
-        "catalog estimates) up to ~2.6e8 Msun (a more recent multi-season RM "
-        "result). Check the current literature and pick one deliberately rather "
-        "than trusting a default; example below uses 5e7."
+        f"\nNGC 5548's black hole mass: Fausnaugh et al. 2016 (Paper III, this "
+        f"data's own paper) adopts {M_BH_FAUSNAUGH_STORM_III:.2g} Msun (Bentz & Katz "
+        f"2015); Starkey et al. 2017 (Paper VI, the CREAM disk-reprocessing fit this "
+        f"package descends from) adopts {M_BH_STARKEY_STORM_VI:.3g} Msun (Pancoast et "
+        f"al. 2014). Example below uses the Paper VI value; check the current "
+        f"literature before trusting either."
     )
     print(f"\nExample fit (all 13 bands, a real multi-week run):")
-    print(f"  python scripts/fit_lightcurves.py --m-bh 5e7 {band_args} \\")
+    print(f"  python scripts/fit_lightcurves.py --m-bh {M_BH_STARKEY_STORM_VI:.4g} {band_args} \\")
     print(f"      --title ngc5548_storm --num-warmup 1000 --num-samples 2000 --dense-mass")
     print(f"\nFor a faster first look, try a handful of bands spanning the wavelength "
           f"range instead, e.g. --band uv1158 ... --band u ... --band g ... --band z ...")
