@@ -2,24 +2,35 @@
 smoke_test.py
 =============
 
-Quick visual sanity check for the whole pipeline: generate a synthetic
-multi-band dataset, run a short NUTS fit (enough to see whether the model
-is doing something sensible, not enough to fully converge), and save plots
-of the raw data, the posterior-predictive fit, and MCMC trace diagnostics.
+Quick "did I break anything" sanity checks, not a full numeric pass/fail
+test (see tests/test_recovery.py for that) -- run these by eye.
 
-This is a "does it look right" check to run by eye after touching
-forward_model.py / model.py / echofit.py -- for a numeric pass/fail check
-see tests/test_recovery.py.
+Two datasets:
+
+- **synthetic** (default): generate a synthetic multi-band dataset, run a
+  short NUTS fit (enough to see whether the model is doing something
+  sensible, not enough to fully converge), and save plots of the raw
+  data, the posterior-predictive fit, and MCMC trace diagnostics. Run this
+  after touching forward_model.py / model.py / echofit.py.
+- **ngc5548**: the same short-fit-and-plot check, but on a small subset of
+  the real NGC 5548 AGN STORM data (downloaded via
+  scripts/download_ngc5548_storm_data.py) instead of synthetic data --
+  a fast pre-flight check that real data loads and fits without anything
+  obviously wrong (crashes, NaNs, a wild divergence rate) before
+  committing to scripts/run_ngc5548_fit.sh's much longer full run. There's
+  no ground truth to compare against here, unlike the synthetic check.
 
 Usage
 -----
     python scripts/smoke_test.py
     python scripts/smoke_test.py --num-warmup 500 --num-samples 500 --outdir /tmp/smoke
+    python scripts/smoke_test.py --dataset ngc5548
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
 
@@ -29,33 +40,16 @@ from echofit.synthetic import generate_synthetic_dataset
 from echofit.echofit import EchoFit
 from echofit import reporting
 
+sys.path.insert(0, str(Path(__file__).parent))
+import download_ngc5548_storm_data as ngc5548_dl  # noqa: E402 (needs sys.path set first)
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--num-warmup", type=int, default=300)
-    parser.add_argument("--num-samples", type=int, default=300)
-    parser.add_argument("--seed", type=int, default=2)
-    parser.add_argument(
-        "--noise-level", type=float, default=0.08,
-        help=(
-            "Fractional noise in the synthetic data. Deliberately higher than "
-            "tests/test_recovery.py's 0.02 (which is tuned for a tight numeric "
-            "check) so the posterior-predictive credible bands are actually "
-            "visible by eye here -- at 0.02 the 95%% CI is ~1%% of the data's "
-            "y-range, i.e. a couple of pixels."
-        ),
-    )
-    parser.add_argument(
-        "--outdir", type=Path, default=Path("smoke_test_output"),
-        help="Directory to write PNGs + report.html into.",
-    )
-    parser.add_argument(
-        "--no-gaps", action="store_true",
-        help="Disable the default observing gaps (2 weeks from day 50, 3 weeks from day 150).",
-    )
-    args = parser.parse_args()
-    args.outdir.mkdir(parents=True, exist_ok=True)
+# 4 bands spanning the full wavelength range -- enough to sanity-check that
+# the real data loads and fits without paying the full 13-band run's cost.
+# Same subset as run_ngc5548_fit.sh's own "quick look" step.
+NGC5548_SMOKE_BANDS = ["uv1158", "u", "g", "z"]
 
+
+def _run_synthetic(args):
     # Same well-resolved-lag setup as tests/test_recovery.py: M_BH large
     # enough that mean lags (days) are well above the sampling cadence, so
     # the echo shape is actually visible by eye rather than buried in noise.
@@ -85,11 +79,11 @@ def main():
         ef.add_lightcurve(name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
     ef.build_grid(n_freq=15, n_tau=100)
 
-    print(f"Fitting ({args.num_warmup} warmup + {args.num_samples} samples, 1 chain)...")
+    print(f"Fitting synthetic data ({args.num_warmup} warmup + {args.num_samples} samples, 1 chain)...")
     t0 = time.time()
     ef.fit(
         rng_seed=0, num_warmup=args.num_warmup, num_samples=args.num_samples,
-        num_chains=1, progress_bar=False,
+        num_chains=1, progress_bar=False, dense_mass=args.dense_mass,
     )
     dt = time.time() - t0
 
@@ -106,6 +100,110 @@ def main():
 
     print(f"\nSaved plots to {args.outdir}/")
     print(f"Open {report_path} to view everything in one page.")
+
+
+def _run_ngc5548(args):
+    raw_dir = args.outdir / "ngc5548_raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    table3_path = ngc5548_dl._download("table3.dat", raw_dir)
+    table4_path = ngc5548_dl._download("table4.dat", raw_dir)
+
+    optical = ngc5548_dl._parse_table3(table3_path)
+    uv = ngc5548_dl._parse_table4(table4_path)
+    all_bands = {name: (wl, optical[name]) for name, wl in ngc5548_dl.OPTICAL_WAVELENGTHS.items()}
+    all_bands.update({name: (lam, uv[name]) for lam, name in ngc5548_dl.UV_BAND_NAMES.items()})
+
+    t0_global = min(min(d["t"]) for _, d in all_bands.values())
+    m_bh = args.m_bh if args.m_bh is not None else ngc5548_dl.M_BH_STARKEY_STORM_VI
+
+    ef = EchoFit(M_BH=m_bh)
+    for name in NGC5548_SMOKE_BANDS:
+        wavelength, d = all_bands[name]
+        t = np.asarray(d["t"]) - t0_global
+        ef.add_lightcurve(name, wavelength=wavelength, t=t, y=np.asarray(d["y"]), yerr=np.asarray(d["yerr"]))
+    ef.build_grid()
+
+    print(f"Fitting real NGC 5548 data, bands {NGC5548_SMOKE_BANDS} "
+          f"({args.num_warmup} warmup + {args.num_samples} samples, M_BH={m_bh:.3g})...")
+    t0 = time.time()
+    ef.fit(
+        rng_seed=0, num_warmup=args.num_warmup, num_samples=args.num_samples,
+        num_chains=1, progress_bar=False, dense_mass=args.dense_mass,
+    )
+    dt = time.time() - t0
+
+    diverging = np.asarray(ef.extra_fields.get("diverging", []))
+    n_div = int(diverging.sum())
+    div_frac = n_div / len(diverging) if len(diverging) else 0.0
+    all_finite = all(np.all(np.isfinite(np.asarray(v))) for v in ef.samples.values())
+
+    print(f"Fit finished in {dt:.1f}s")
+    print(f"Divergent transitions: {n_div}/{len(diverging)} ({div_frac:.0%})")
+    print(f"All sample values finite: {all_finite}")
+    print(f"\n{'parameter':<14}{'mean':>10}{'std':>10}")
+    for name in ["log_mdot", "inclination", "sigma_drw", "tau_drw"]:
+        s = np.asarray(ef.samples[name])
+        print(f"{name:<14}{s.mean():>10.3f}{s.std():>10.3f}")
+
+    if not all_finite:
+        print("\n*** WARNING: non-finite values in posterior samples -- something is wrong. ***")
+    if div_frac > 0.3:
+        print(f"\n*** WARNING: {div_frac:.0%} divergent transitions -- that's high even for a short, "
+              f"un-tuned smoke-test chain; investigate before trusting a longer real run. ***")
+
+    print("\nRendering plots...")
+    report_path = reporting.generate_report(ef, args.outdir, fit_seconds=dt, title="ngc5548_smoke_test")
+
+    print(f"\nSaved plots to {args.outdir}/")
+    print(f"Open {report_path} to view everything in one page.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--dataset", choices=("synthetic", "ngc5548"), default="synthetic")
+    parser.add_argument("--num-warmup", type=int, default=None, help="Default: 300 (synthetic) / 30 (ngc5548).")
+    parser.add_argument("--num-samples", type=int, default=None, help="Default: 300 (synthetic) / 30 (ngc5548).")
+    parser.add_argument("--seed", type=int, default=2, help="Synthetic data only.")
+    parser.add_argument(
+        "--noise-level", type=float, default=0.08,
+        help=(
+            "Synthetic data only. Deliberately higher than tests/test_recovery.py's "
+            "0.02 (tuned for a tight numeric check) so the posterior-predictive "
+            "credible bands are actually visible by eye here -- at 0.02 the 95%% CI "
+            "is ~1%% of the data's y-range, i.e. a couple of pixels."
+        ),
+    )
+    parser.add_argument(
+        "--outdir", type=Path, default=Path("smoke_test_output"),
+        help="Directory to write PNGs + report.html into.",
+    )
+    parser.add_argument(
+        "--no-gaps", action="store_true",
+        help="Synthetic data only. Disable the default observing gaps (2 weeks from day 50, 3 weeks from day 150).",
+    )
+    parser.add_argument(
+        "--m-bh", type=float, default=None,
+        help="ngc5548 dataset only. Defaults to the Starkey et al. 2017 (STORM Paper VI) value; see README.md.",
+    )
+    parser.add_argument(
+        "--dense-mass", action="store_true",
+        help="Passed through to EchoFit.fit() -- see CLAUDE.md decision #17. Off by default here too.",
+    )
+    args = parser.parse_args()
+    args.outdir.mkdir(parents=True, exist_ok=True)
+
+    if args.dataset == "synthetic":
+        if args.num_warmup is None:
+            args.num_warmup = 300
+        if args.num_samples is None:
+            args.num_samples = 300
+        _run_synthetic(args)
+    else:
+        if args.num_warmup is None:
+            args.num_warmup = 30
+        if args.num_samples is None:
+            args.num_samples = 30
+        _run_ngc5548(args)
 
 
 if __name__ == "__main__":

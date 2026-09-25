@@ -42,8 +42,8 @@ Regenerate with `python scripts/make_fit_animation.py`.*
 - [📈 Fitting your own light curves, with saved/resumable runs](#-fitting-your-own-light-curves-with-savedresumable-runs)
   - [🖥️ Command file for running real light curve campaigns](#-command-file-for-running-real-light-curve-campaigns)
   - [🐍 From Python directly](#-from-python-directly)
-- [📡 Real-data worked example: NGC 5548 (AGN STORM)](#-real-data-worked-example-ngc-5548-agn-storm)
 - [🧪 Visual smoke test](#-visual-smoke-test)
+- [📡 Real-data worked example: NGC 5548 (AGN STORM)](#-real-data-worked-example-ngc-5548-agn-storm)
 - [✅ Tests and coverage](#-tests-and-coverage)
 - [⏱️ Performance profiling](#-performance-profiling)
 - [🔄 Swapping the response function](#-swapping-the-response-function)
@@ -509,6 +509,44 @@ variable, then `./outputs` (relative to wherever you run your script from).
 Without `title=`, `EchoFit` behaves exactly as in the Quickstart above --
 nothing is written to disk.
 
+## 🧪 Visual smoke test
+
+For a quick "did I break anything" check after touching `forward_model.py`,
+`model.py`, or `echofit.py`, run a short fit on synthetic data and save plots
+of the raw data, the inferred driving light curve (extended 30 days before/
+after the data -- its credible band should widen there before saturating,
+since the driver is DRW-like), the posterior-predictive echo fit + response
+function per band, the driver's power spectrum against the fitted DRW prior
+and the w^-2 random-walk asymptote, and MCMC trace diagnostics:
+
+```bash
+python scripts/smoke_test.py                # ~30-50s, 300 warmup + 300 samples
+python scripts/smoke_test.py --num-warmup 100 --num-samples 100   # faster, noisier
+python scripts/smoke_test.py --no-gaps       # fully uniform random sampling instead
+```
+
+By default the synthetic campaign includes two observing gaps (2 weeks from
+day 50, 3 weeks from day 150) to make sampling irregular/harder, closer to a
+real campaign than uniform random sampling.
+
+Writes PNGs and a `report.html` (open it to see everything in one page) to
+`smoke_test_output/`. This is a visual/eyeball check, not a pass/fail test;
+for that, see `tests/test_recovery.py`.
+
+**`--dataset ngc5548`** runs the same short-fit-and-plot check on a small
+4-band subset of the real NGC 5548 AGN STORM data instead (downloading it
+first if needed) -- a fast pre-flight check (~30-60s) that real data loads
+and fits without anything obviously wrong (crashes, NaNs, a wild divergence
+rate) before committing to the much longer full run below:
+
+```bash
+python scripts/smoke_test.py --dataset ngc5548
+```
+
+There's no ground truth to compare against here (unlike the synthetic
+check), and 30 warmup + 30 samples is nowhere near enough to converge --
+this is only checking that nothing is obviously broken, not fit quality.
+
 ## 📡 Real-data worked example: NGC 5548 (AGN STORM)
 
 Everything above uses synthetic data. **`scripts/run_ngc5548_fit.sh`** is
@@ -522,6 +560,11 @@ Run it directly:
 ```bash
 ./scripts/run_ngc5548_fit.sh
 ```
+
+**Before committing to that** (Step 3 alone can take a while), run
+`python scripts/smoke_test.py --dataset ngc5548` first -- see "Visual smoke
+test" above. It's the same real data on a smaller 4-band subset, ~30-60s,
+just checking nothing is obviously broken before the longer run.
 
 **Step 1** (`scripts/download_ngc5548_storm_data.py`) downloads and
 reshapes the real data into 13 bands' worth of `t y yerr` text files,
@@ -559,30 +602,6 @@ default to the Paper VI value, since it's the directly comparable
 disk-reprocessing analysis, but pass your own `--m-bh` if you'd rather
 use Paper III's or a more recent estimate -- check the current literature
 before trusting either.
-
-## 🧪 Visual smoke test
-
-For a quick "did I break anything" check after touching `forward_model.py`,
-`model.py`, or `echofit.py`, run a short fit on synthetic data and save plots
-of the raw data, the inferred driving light curve (extended 30 days before/
-after the data -- its credible band should widen there before saturating,
-since the driver is DRW-like), the posterior-predictive echo fit + response
-function per band, the driver's power spectrum against the fitted DRW prior
-and the w^-2 random-walk asymptote, and MCMC trace diagnostics:
-
-```bash
-python scripts/smoke_test.py                # ~30-50s, 300 warmup + 300 samples
-python scripts/smoke_test.py --num-warmup 100 --num-samples 100   # faster, noisier
-python scripts/smoke_test.py --no-gaps       # fully uniform random sampling instead
-```
-
-By default the synthetic campaign includes two observing gaps (2 weeks from
-day 50, 3 weeks from day 150) to make sampling irregular/harder, closer to a
-real campaign than uniform random sampling.
-
-Writes PNGs and a `report.html` (open it to see everything in one page) to
-`smoke_test_output/`. This is a visual/eyeball check, not a pass/fail test;
-for that, see `tests/test_recovery.py`.
 
 ## ✅ Tests and coverage
 
