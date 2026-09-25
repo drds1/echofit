@@ -25,11 +25,42 @@ each one, and simulate the pair moving together under Hamiltonian dynamics
 for a while before proposing the endpoint. Because the simulated dynamics
 follow the *gradient* of the log-posterior (steepest ascent/descent, not a
 random guess), the proposed point can be far from the start and still have
-a high acceptance probability. NUTS automates the one manual choice plain
-HMC leaves (how long to simulate for) by running the simulation forwards
-*and* backwards from the current point, doubling the trajectory length
-each time, and stopping automatically once the trajectory starts to
-"U-turn" back on itself -- hence the name.
+a high acceptance probability.
+
+### What a "leapfrog step" actually is
+
+The simulated dynamics are a continuous-time trajectory (think: a ball
+rolling around a bowl-shaped landscape), but there's no closed-form
+solution for it on an arbitrary posterior, so it has to be approximated
+numerically, the same way you'd numerically integrate any differential
+equation. HMC/NUTS uses the **leapfrog integrator**: alternate a half-step
+update of the momentum, a full-step update of the position using that
+momentum, then another half-step update of the momentum, each using the
+gradient at the current point. Position and momentum updates "leapfrog"
+over each other (hence the name) rather than updating simultaneously,
+which is what makes the integrator both accurate and exactly reversible,
+a requirement for the sampler to remain a valid MCMC method. Each of these
+small alternating updates, using one gradient evaluation, is a single
+**leapfrog step**; a full trajectory is a chain of many leapfrog steps
+taken one after another.
+
+### What "one sample" means, and why step count varies per sample
+
+NUTS builds a trajectory by taking leapfrog steps in **doublings**: 1 step,
+then (if no U-turn yet) 2 more, then 4 more, then 8, and so on, running
+both forwards and backwards from the current point, until the trajectory
+either U-turns on itself or hits `max_tree_depth`'s ceiling (NumPyro's
+default is depth 10, i.e. up to `2**10 - 1 = 1023` leapfrog steps). NUTS
+then picks **one point** from that entire trajectory as the next posterior
+draw, i.e. **one NUTS sample**. So "leapfrog steps per sample" means
+exactly that: how many of these small gradient-using integration steps it
+took to build the trajectory that one sample came from, not how many
+samples were produced (a trajectory of 127 leapfrog steps still yields
+exactly one posterior sample, at whichever point on that trajectory NUTS
+selects). This is also why it varies sample to sample: an easy region of
+the posterior might U-turn after 15 steps, a harder one might run all the
+way to the ceiling, and section 2 below measures that distribution
+directly, before and after `dense_mass`.
 
 This is why the model is built the way CLAUDE.md's design decisions
 describe: the driver is a Fourier series with a closed-form convolution
@@ -84,11 +115,15 @@ gain, see CLAUDE.md decision #13) are correlated in this fit (`r ~ -0.68`,
 checked directly) -- variance in the shared driver amplitude has to be
 absorbed by *some* combination of the DRW's own scale and each band's
 gain, so the posterior traces out a curved ridge rather than a round blob.
-The diagonal mass matrix's implied 1-sigma step ellipse (orange, left) is
-axis-aligned and doesn't follow that ridge; the dense mass matrix's
-implied ellipse (blue, right) is tilted to match it:
+Both NUTS runs sample the same posterior (only sampler efficiency
+differs), so their draws are pooled below into one scatter -- the point
+isn't that the two runs' data looks different, it's that the two mass
+matrices *assume* different shapes for that same data. The diagonal mass
+matrix's implied 1-sigma step ellipse (orange) is a circle, forced to
+ignore the tilt; the dense mass matrix's implied ellipse (blue) is tilted
+to match it:
 
-![Scatter of sigma_drw vs S_g posterior draws for the same fit, with each kernel's implied step-direction ellipse overlaid: the diagonal-mass ellipse is a circle that ignores the visible negative correlation in the point cloud, while the dense-mass ellipse is tilted to follow it](images/dense_mass_correlation_ellipse.png)
+![Scatter of pooled sigma_drw vs S_g posterior draws (both NUTS runs combined), with both kernels' implied step-direction ellipses overlaid on the same axes: the orange diagonal-mass ellipse is a circle that visibly cuts across the point cloud's negative-correlation tilt, while the blue dense-mass ellipse is tilted to follow it closely](images/dense_mass_correlation_ellipse.png)
 
 Regenerate both charts (e.g. after a model change that might alter the
 posterior geometry) with:

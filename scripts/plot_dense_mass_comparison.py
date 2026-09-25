@@ -66,7 +66,7 @@ def _cov_ellipse(ax, x, y, use_correlation: bool, **kwargs):
     vals, vecs = vals[order], vecs[:, order]
     angle = np.degrees(np.arctan2(vecs[1, 0], vecs[0, 0]))
     width, height = 2 * np.sqrt(vals)
-    ell = Ellipse((x.mean(), y.mean()), width, height, angle=angle, fill=False, linewidth=2, **kwargs)
+    ell = Ellipse((x.mean(), y.mean()), width, height, angle=angle, fill=False, linewidth=2.5, **kwargs)
     ax.add_patch(ell)
 
 
@@ -91,22 +91,33 @@ def plot_correlated_pair_scatter(diag_samples, dense_samples, path):
     # checked directly) -- distinct from the S_g/S_i *exact* r=1.000
     # amplitude degeneracy that CLAUDE.md decision #13 already covers, so
     # this illustrates decision #17's mass-matrix story on its own.
-    fig, axes = plt.subplots(1, 2, figsize=(11, 5), sharex=True, sharey=True)
-    for ax, samples, title, ellipse_color, use_correlation in [
-        (axes[0], diag_samples, "Diagonal mass matrix (default)", "tab:orange", False),
-        (axes[1], dense_samples, "dense_mass=True", "tab:blue", True),
-    ]:
-        x, y = np.asarray(samples["S_g"]), np.asarray(samples["sigma_drw"])
-        ax.scatter(x, y, s=8, alpha=0.4, color="0.3")
-        _cov_ellipse(ax, x, y, use_correlation=use_correlation, edgecolor=ellipse_color)
-        ax.set_title(title)
-        ax.set_xlabel("S_g")
-        ax.grid(alpha=0.6)
-    axes[0].set_ylabel("sigma_drw")
-    fig.suptitle(
-        "Posterior draws for a correlated pair, with each kernel's implied\n"
-        "1-sigma step-direction ellipse -- axis-aligned (diagonal) vs tilted (dense)"
+    #
+    # Both runs sample the *same* posterior (only sampler efficiency
+    # differs), so plotting their draws in two side-by-side panels made two
+    # near-identical-looking scatter clouds -- correct (that's what a
+    # working sampler should do), but it buried the actual point. The
+    # point isn't "the data looks different", it's "the two mass matrices
+    # *assume* different shapes for the same data" -- so both ellipses go
+    # on one panel, on top of the pooled draws, where the mismatch between
+    # the orange circle and the visibly tilted point cloud is immediate.
+    x = np.concatenate([np.asarray(diag_samples["S_g"]), np.asarray(dense_samples["S_g"])])
+    y = np.concatenate([np.asarray(diag_samples["sigma_drw"]), np.asarray(dense_samples["sigma_drw"])])
+
+    fig, ax = plt.subplots(figsize=(7.5, 6.5))
+    ax.scatter(x, y, s=10, alpha=0.35, color="0.35", label="posterior draws (pooled, both runs)")
+    _cov_ellipse(
+        ax, x, y, use_correlation=False, edgecolor="tab:orange",
+        label="diagonal mass matrix's assumed shape\n(a circle -- misses the tilt)",
     )
+    _cov_ellipse(
+        ax, x, y, use_correlation=True, edgecolor="tab:blue",
+        label="dense mass matrix's assumed shape\n(tilted -- matches the data)",
+    )
+    ax.set_xlabel("S_g")
+    ax.set_ylabel("sigma_drw")
+    ax.set_title("The posterior's real shape vs. what each mass matrix assumes")
+    ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
+    ax.grid(alpha=0.6)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
