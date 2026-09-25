@@ -11,6 +11,7 @@ implementation instead of duplicating the HTML.
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,16 @@ def _scalar_param_names(samples: dict):
     return sorted(names)
 
 
+def _img_data_uri(path: Path) -> str:
+    """Base64 ``data:`` URI for a PNG already saved at ``path``, so
+    ``report.html`` can embed it inline instead of referencing it by
+    relative filename -- the report is then a single self-contained file
+    (openable and emailable on its own), not a folder of PNGs plus one HTML
+    file that only renders correctly alongside them."""
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
 def generate_report(
     ef,
     out_dir,
@@ -41,7 +52,13 @@ def generate_report(
     title: Optional[str] = None,
 ) -> Path:
     """Render the standard plot set for a fitted ``ef`` and write
-    ``report.html`` (plus the PNGs it references) into ``out_dir``.
+    ``report.html`` into ``out_dir``, alongside the individual PNGs (kept on
+    disk for the smoke-test/checkpoint machinery that inspects them
+    directly, e.g. ``tests/test_run_manager.py``). ``report.html`` itself
+    embeds every image inline as a base64 ``data:`` URI rather than
+    referencing those PNGs by relative path, so it's a single
+    self-contained file: it can be emailed or copied elsewhere on its own
+    and will still render correctly without the rest of ``out_dir``.
 
     Parameters
     ----------
@@ -129,9 +146,11 @@ def generate_report(
     n_div = int(diverging.sum()) if diverging.size else 0
     n_total = len(diverging)
 
+    data_uris = {key: _img_data_uri(p) for key, p in paths.items()}
+
     report_path = out_dir / "report.html"
     report_path.write_text(
-        _report_html(ef, paths, fit_seconds, n_div, n_total, truth, title)
+        _report_html(ef, paths, data_uris, fit_seconds, n_div, n_total, truth, title)
     )
     return report_path
 
@@ -172,7 +191,7 @@ def _summary_table_html(ef, truth: Optional[dict]) -> str:
     )
 
 
-def _report_html(ef, paths, fit_seconds, n_div, n_total, truth, title) -> str:
+def _report_html(ef, paths, data_uris, fit_seconds, n_div, n_total, truth, title) -> str:
     header_bits = []
     if title:
         header_bits.append(f"run: <b>{title}</b>")
@@ -189,7 +208,7 @@ def _report_html(ef, paths, fit_seconds, n_div, n_total, truth, title) -> str:
 different places here are the same thing a Gelman-Rubin R-hat check would
 flag, made visible -- see CLAUDE.md's note on why a single chain isn't
 sufficient evidence of convergence.</p>
-<img src="{paths['corner'].name}">
+<img src="{data_uris['corner']}">
 """)
     if "corner_bands" in paths:
         corner_sections.append(f"""
@@ -198,7 +217,7 @@ sufficient evidence of convergence.</p>
 each band's own flux calibration, not physically meaningful on their own
 but worth checking for the same reason as the disk corner plot above:
 chains disagreeing here means the fit hasn't converged.</p>
-<img src="{paths['corner_bands'].name}">
+<img src="{data_uris['corner_bands']}">
 """)
     if "corner_free_lag" in paths:
         corner_sections.append(f"""
@@ -207,7 +226,7 @@ chains disagreeing here means the fit hasn't converged.</p>
 lag each such band's top-hat response is centred on (see
 CLAUDE.md decision #7 on why these need a driver light curve to be
 identifiable at all).</p>
-<img src="{paths['corner_free_lag'].name}">
+<img src="{data_uris['corner_free_lag']}">
 """)
     if "fourier_correlation" in paths:
         corner_sections.append(f"""
@@ -216,7 +235,7 @@ identifiable at all).</p>
 (pooled across chains). Mostly-diagonal (near zero off-diagonal) is what
 the non-centred DRW prior parameterisation assumes; strong off-diagonal
 structure would be worth a closer look.</p>
-<img src="{paths['fourier_correlation'].name}">
+<img src="{data_uris['fourier_correlation']}">
 """)
     corner_section = "".join(corner_sections)
 
@@ -229,7 +248,7 @@ that Starkey, Horne &amp; Villforth (2016, MNRAS 456, 1960) eq. 12 defines, up
 to an additive constant. Should decrease during warm-up then flatten out
 once the chain has converged; vertical grey lines (if shown) mark checkpoint
 boundaries.</p>
-<img src="{paths['bof'].name}">
+<img src="{data_uris['bof']}">
 """
 
     return f"""<!doctype html>
@@ -249,7 +268,7 @@ code {{ background: #f2f2f2; padding: 1px 4px; }}
 {_summary_table_html(ef, truth)}
 
 <h2>Raw light curves</h2>
-<img src="{paths['raw'].name}">
+<img src="{data_uris['raw']}">
 
 <h2>Posterior-predictive fit + response function</h2>
 <p>Shaded bands are 68%/95% credible intervals; black points are the data. The
@@ -258,7 +277,7 @@ below it), extended a bit before/after the data -- the credible band should
 widen roughly like t^(1/2) outside the data before saturating, since the
 driver is a DRW. The right-hand panels are the inferred response function
 &psi;(&tau;) per band.</p>
-<img src="{paths['fits'].name}">
+<img src="{data_uris['fits']}">
 
 <h2>Driver power spectrum</h2>
 <p>Posterior P(&omega;) = (S<sup>2</sup>+C<sup>2</sup>)/(2&Delta;&omega;) per
@@ -267,11 +286,11 @@ sigma_drw/tau_drw draws (blue dashed) and a plain &omega;<sup>-2</sup>
 random-walk reference (red dotted). These should roughly track each other --
 if the posterior power spectrum diverges from the Lorentzian shape a lot,
 that's worth a closer look.</p>
-<img src="{paths['power'].name}">
+<img src="{data_uris['power']}">
 
 <h2>MCMC trace diagnostics</h2>
 <p>Traces should look like noisy horizontal bands (well-mixed), not
 slow drifts or a chain stuck at one value.</p>
-<img src="{paths['diagnostics'].name}">
+<img src="{data_uris['diagnostics']}">
 {corner_section}{bof_section}</body></html>
 """
