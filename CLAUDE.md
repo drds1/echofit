@@ -647,6 +647,93 @@ and package layout.
     `poetry run pytest -m "not slow"` manually before pushing for that
     feedback sooner, accepting the ~10 minutes.
 
+17. **`dense_mass=True` (a NUTS kernel option, now exposed on `EchoFit.fit()`) is the single
+    highest-leverage, accuracy-preserving speed lever found so far, discovered directly from
+    `scripts/profile_pipeline.py`'s own numbers, not guessed.** That script's per-iteration chart showed
+    every individual forward-model component (response function, `transfer_coeffs`+`compute_echo`,
+    potential-energy eval/grad) costing well under a millisecond, while NUTS's own measured per-sample cost
+    was ~47ms, a ~120x gap that only makes sense if a single NUTS sample is taking on the order of 100+
+    leapfrog steps. Checked directly against NUTS's own `num_steps` extra field (not inferred, measured):
+    with the default diagonal mass matrix, this model's NUTS chain spends essentially every sample pinned at
+    `max_tree_depth`'s default ceiling (2^10-1 = 1023 steps) -- mean 857.9, median exactly 1023, minimum 511,
+    with **zero divergences**. That "maxed-out trajectory length with zero divergences" pattern is the
+    textbook signature of NUTS being cut off by the step budget before it can find a genuine U-turn, not
+    genuinely difficult/multimodal geometry -- exactly the kind of correlated-parameter geometry a diagonal
+    mass matrix (which only rescales each parameter independently) can't correct for, but a full
+    covariance-based one can.
+
+    `dense_mass=True` on NumPyro's `NUTS` kernel (estimates a full covariance matrix during warmup instead of
+    per-parameter variances) fixed it directly: mean leapfrog steps per sample dropped **~7.5x** (857.9 ->
+    113.6), with `log_mdot` recovery unchanged (if anything marginally tighter: posterior std 0.023 ->
+    0.021). The one real cost is that a dense mass matrix has O(P^2) entries to estimate during warmup
+    instead of O(P), so it needs more warmup than the default to adapt properly -- confirmed directly: 200
+    warmup samples gave a real, if modest, divergence rate (12/200, 6%), which 800 warmup samples brought
+    down to a healthy 1.5% (3/200) with the same steps-per-sample improvement. This is a warmup-phase
+    (one-off) cost, not a per-sample (recurring) one, so it doesn't erode the wall-time win on any run long
+    enough for the sampling phase to dominate, which `scripts/profile_pipeline.py`'s own pipeline breakdown
+    shows is true for any run past a few hundred samples.
+
+    Off by default (`dense_mass=False`) to keep existing behaviour/results reproducible for anyone already
+    relying on it; exposed as a plain passthrough on `EchoFit.fit()` (both the in-memory and `title=`
+    checkpointed paths -- persisted in the checkpointed path's `_fit_config`/`manifest.json` the same way
+    `max_tree_depth` already was, so a resumed run keeps using it rather than silently reverting to diagonal
+    partway through) and on `scripts/fit_lightcurves.py`'s `--dense-mass` flag. Not applied automatically,
+    because the extra warmup it needs is a real, user-facing tradeoff (more warmup samples means more one-off
+    wall time before sampling starts) that's better left as an explicit choice than a silent default change.
+    `docs/mcmc_implementation.md` covers the whole mechanism (the mass matrix, why NUTS needs gradients at
+    all, JIT compilation) with real before/after charts (`scripts/plot_dense_mass_comparison.py` regenerates
+    them), and a comparison to the original CREAM Fortran implementation checked directly against
+    `cream_f90.f90`'s own sampling loop, not assumed: its default (`mcmcmulti_iteration`) is single-site
+    random-scan Metropolis-Hastings (a Gaussian random-walk proposal on one parameter at a time, standard
+    Metropolis accept/reject, crude accept/reject-streak step-size doubling/halving), and it turns out to
+    have a genuine, independently-arrived-at analogue to `dense_mass` (`affine_step`, opt-in via a
+    `cream_affine.par` file, only active every other iteration, only for a hand-picked parameter subset):
+    eigendecompose that subset's empirical covariance and propose a joint step along its principal axes,
+    the same "align the proposal with correlations, not just per-parameter scale" idea `dense_mass` applies
+    automatically to every parameter. The difference that remains is gradients: `affine_step` is still a
+    blind random draw within the right-shaped geometry, while NUTS's leapfrog dynamics move along the
+    log-posterior's gradient at every step, which is the standard, well-established reason HMC/NUTS-family
+    samplers need far fewer posterior evaluations than Metropolis-Hastings-family ones in a correlated,
+    moderate-to-high-dimensional posterior like this one's (tens of driver Fourier coefficients alone). No
+    head-to-head `echofit`-vs-`pycecream` wall-clock benchmark has been run; the comparison above is of the
+    two mechanisms, verified against the Fortran source, not a benchmark of the two actual codebases.
+
+18. **Per-light-curve error rescaling (`fit_error_model`) is a direct, checked adaptation of the author's
+    PhD-era CREAM Fortran code's `sigexpand`/`varexpand` nuisance parameters, found by reading
+    `cream_f90.f90` while answering "is there anything to learn from the Fortran implementation" (see
+    `docs/mcmc_implementation.md`'s comparison section).** Confirmed directly at `cream_f90.f90:4284`:
+    `ernew2 = (er(it)*fnow)**2 + varnow`, i.e. the reported error is treated as only approximately correct
+    and combined with a multiplicative rescale (`fnow`) and an additive jitter variance (`varnow`), both
+    themselves fitted nuisance parameters. `echofit` previously had no equivalent: `model.py`'s likelihood
+    used `d["yerr"]` verbatim (`dist.Normal(y_pred, d["yerr"])`), which silently assumes every quoted
+    uncertainty is exactly right -- a real risk on actual (not synthetic) data, where an overconfident
+    likelihood from underestimated errors makes everything else (the BOF, the other posteriors) look more
+    constrained than it should.
+
+    `EchoFit.add_lightcurve(..., fit_error_model=True)` / `add_driver_lightcurve(..., fit_error_model=True)`
+    turn this on **per light curve**, off by default (`False`) so existing/synthetic-data fits keep exactly
+    today's likelihood unless explicitly opted in -- a deliberate, explicit request when this was
+    implemented, not an incidental default. When on, that light curve's `sigma_scale_{name}`
+    (`LogNormal(0, 0.5)`, median 1, "no rescaling" is the prior's own centre) and `sigma_jitter_{name}`
+    (`HalfNormal(mean(yerr))`, anchored to that light curve's own typical quoted error, the same
+    data-anchoring philosophy as `sigma_drw`'s prior, decision #13) combine as `sigma_eff =
+    sqrt((sigma_scale*yerr)**2 + sigma_jitter**2)` in place of the raw `yerr`. Both new sites go through the
+    existing `_param`/`fixed_params` mechanism (decision #15) automatically, so e.g.
+    `fixed_params={"sigma_jitter_g": 0.0}` pins just the jitter term while still fitting the rescale factor
+    for that band, without any new plumbing.
+
+    **A real bug found and fixed while wiring this up, not a hypothetical one:** `run_manager.save_bands_npz`/
+    `save_driver_npz` were hardcoded to a fixed set of keys (`t`, `y`, `yerr`, `wavelength`, `lag_mode`) and
+    would have silently dropped `fit_error_model` across a checkpointed run's resume cycle -- the exact same
+    class of bug decision #15 hit once already with `fixed_params` not persisting. Fixed by adding
+    `fit_error_model` to both save/load functions (backward-compatible: an old checkpoint file without the
+    key loads as `False`, not an error). A *second*, separate instance of the same class of bug was caught by
+    the resume-persistence test itself: `EchoFit.resume()` correctly loaded `fit_error_model` via the fixed
+    loader but never passed it through to the `add_lightcurve()`/`add_driver_lightcurve()` calls that
+    reconstruct `self.bands`/`self.driver_data` -- two independent places the same value had to flow through
+    correctly, both needed fixing, both are covered by
+    `tests/test_error_model.py::test_error_model_persists_across_resume`.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model
@@ -751,6 +838,10 @@ poetry run pytest --cov=echofit --cov-report=term-missing  # + coverage
 poetry run pre-commit install  # one-time: run the fast subset on every commit
 poetry run python scripts/smoke_test.py  # quick visual check: fit + save
                                           # plots to smoke_test_output/report.html (~30-50s)
+poetry run python scripts/profile_pipeline.py  # one-off perf snapshot: where
+                                                # wall time goes across the whole
+                                                # pipeline -> profiling_output/
+                                                # (gitignored, ~a few minutes)
 poetry run jupyter notebook notebooks/demo.ipynb
 ```
 

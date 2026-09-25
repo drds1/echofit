@@ -44,6 +44,7 @@ Regenerate with `python scripts/make_fit_animation.py`.*
   - [🐍 From Python directly](#-from-python-directly)
 - [🧪 Visual smoke test](#-visual-smoke-test)
 - [✅ Tests and coverage](#-tests-and-coverage)
+- [⏱️ Performance profiling](#-performance-profiling)
 - [🔄 Swapping the response function](#-swapping-the-response-function)
 - [🌈 Emission-line / free-lag mode and driver light curves](#-emission-line--free-lag-mode-and-driver-light-curves)
 - [⚠️ Status / caveats](#-status--caveats)
@@ -167,6 +168,30 @@ fixed while fitting everything else. A key that couldn't be a real site
 given the bands/driver actually registered raises at `.fit()` time, to
 catch typos rather than silently doing nothing.
 
+**Each light curve can optionally fit its own error rescaling**, via
+`add_lightcurve(..., fit_error_model=True)` (or
+`add_driver_lightcurve(..., fit_error_model=True)`), off by default per
+light curve so nothing changes unless you opt in:
+
+```python
+ef.add_lightcurve("g", wavelength=4770.0, t=t_g, y=y_g, yerr=yerr_g, fit_error_model=True)
+ef.add_lightcurve("i", wavelength=7625.0, t=t_i, y=y_i, yerr=yerr_i)  # trusts yerr_i as given
+```
+
+When on, that band's reported `yerr` is treated as only approximately
+right rather than exact: two extra nuisance parameters, `sigma_scale_g`
+(multiplicative, prior centred on 1 -- "no rescaling") and `sigma_jitter_g`
+(additive, anchored to that band's own typical quoted error), combine as
+`sigma_eff = sqrt((sigma_scale*yerr)**2 + sigma_jitter**2)` in place of
+`yerr` in the likelihood. This is a direct, checked adaptation of the
+author's PhD-era CREAM Fortran code's own `sigexpand`/`varexpand`
+parameters (see `docs/mcmc_implementation.md`'s Fortran comparison and
+`CLAUDE.md` decision #18) -- worth turning on for any band whose quoted
+errors you don't fully trust; leave it off for synthetic data (where
+`yerr` is correct by construction) or any band you're confident in. Fix
+either nuisance parameter with `fixed_params={"sigma_jitter_g": 0.0}` etc.
+if you want the model structure on but one part pinned.
+
 ## 📦 Package layout
 
 ```
@@ -197,11 +222,18 @@ echofit/
 docs/
     thin_disk_response.md  how thin_disk_response is computed, with
                           scaling-law verification charts
+    mcmc_implementation.md  how the NUTS/HMC inference works, the
+                          dense_mass mass-matrix mechanism with before/after
+                          charts, and how this compares to the original
+                          CREAM Fortran implementation
 notebooks/
     demo.ipynb            end-to-end synthetic-data demo
 scripts/
     smoke_test.py          quick visual sanity check (see below)
+    profile_pipeline.py    one-off performance profile, split into one-off
+                          vs per-iteration costs (see "Performance profiling")
     plot_thin_disk_response_scalings.py  regenerates docs/thin_disk_response.md's charts
+    plot_dense_mass_comparison.py  regenerates docs/mcmc_implementation.md's charts
 tests/
     test_forward_model.py  basic sanity checks on the forward model
     test_recovery.py       end-to-end MCMC recovery test on synthetic data
@@ -549,6 +581,40 @@ branch nobody else is using yet).
 suite with coverage on every push to `main` and every pull request --
 this, not a local hook, is where tests actually run automatically, since
 it's the place the slow tests actually get run automatically.
+
+## ⏱️ Performance profiling
+
+For a one-off snapshot of where wall time actually goes in the pipeline,
+split into **one-off costs** (grid building, the thin-disk fast response's
+template table build, NUTS's JIT-compile+warmup, report generation --
+fixed, however long you fit for) versus **per-iteration costs** (each
+response-function family's per-call cost, the closed-form convolution
+step, a full-model potential-energy/gradient evaluation, and NUTS's own
+measured per-sample cost -- these are what actually determine how a long
+run scales):
+
+```bash
+python scripts/profile_pipeline.py                    # a few minutes
+python scripts/profile_pipeline.py --outdir /tmp/echofit_profile
+```
+
+Every per-call timing is measured under `jax.jit`, not eager Python -- see
+`CLAUDE.md` decision #9 for why an eager measurement here would badly
+mislead (a ~50x gap was found between the two for `thin_disk_response`).
+Writes two charts (`one_off_costs.png`, `per_iteration_costs.png`), a
+machine-readable `results.json`, and a `report.html` tying them together to
+`profiling_output/` (gitignored: this is a snapshot to regenerate, not
+something to keep committed and let go stale).
+
+**What this actually found**: every forward-model component is
+sub-millisecond, so the real per-iteration cost is almost entirely NUTS
+itself running long leapfrog trajectories, and `EchoFit.fit(dense_mass=True)`
+cuts that ~7.5x at no loss of recovery accuracy -- see `CLAUDE.md` decision
+#17 for the full investigation and the warmup-length tradeoff that comes
+with it, and [`docs/mcmc_implementation.md`](docs/mcmc_implementation.md)
+for how NUTS and the `dense_mass` mass-matrix mechanism actually work
+(with real before/after charts), plus an honest comparison to how the
+original CREAM Fortran implementation explored parameter space.
 
 ## 🔄 Swapping the response function
 

@@ -93,6 +93,36 @@ def test_max_tree_depth_is_passed_through(monkeypatch):
     assert seen.get("max_tree_depth") == 4
 
 
+def test_dense_mass_is_passed_through_to_nuts(monkeypatch):
+    """Regression check that inference._build_kernel actually forwards
+    dense_mass to NUTS -- see CLAUDE.md decision #17: with the default
+    diagonal mass matrix, NUTS was found to spend nearly every sample
+    pinned at max_tree_depth's ceiling on this model (confirmed directly:
+    mean ~858 leapfrog steps/sample); dense_mass=True cut that ~7.5x with
+    no loss of recovery accuracy, so it needs to actually reach NUTS, not
+    just be accepted and silently dropped."""
+    import echofit.inference as inference_mod
+
+    seen = {}
+    real_nuts = inference_mod.NUTS
+
+    def spy_nuts(model, **kwargs):
+        seen.update(kwargs)
+        return real_nuts(model, **kwargs)
+
+    monkeypatch.setattr(inference_mod, "NUTS", spy_nuts)
+
+    data = generate_synthetic_dataset(
+        M_BH=1e8, bands={"g": 4770.0}, n_obs_per_band=15, n_freq=6, n_tau=30, seed=0,
+    )
+    ef = EchoFit(M_BH=1e8)
+    d = data["bands"]["g"]
+    ef.add_lightcurve("g", wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
+    ef.build_grid(n_freq=6, n_tau=30)
+    ef.fit(num_warmup=5, num_samples=5, dense_mass=True, progress_bar=False)
+    assert seen.get("dense_mass") is True
+
+
 def test_checkpointed_run_with_driver_persists_and_resumes(tmp_path):
     """A registered driver light curve is saved/reloaded across a
     checkpointed run + resume, and a non-default num_chains warns rather
@@ -116,6 +146,27 @@ def test_checkpointed_run_with_driver_persists_and_resumes(tmp_path):
     ef2 = EchoFit.resume("driver_checkpoint_test", output_dir=str(tmp_path))
     assert ef2.driver_data is not None
     np.testing.assert_allclose(ef2.driver_data["t"], data["driver"]["t"])
+
+
+def test_dense_mass_persists_across_resume(tmp_path):
+    """dense_mass is part of the checkpointed path's persisted fit_config
+    (CLAUDE.md decision #17), same as max_tree_depth/checkpoint_every --
+    a resumed run must keep using it, not silently fall back to the
+    diagonal-mass-matrix default partway through a run."""
+    data = generate_synthetic_dataset(
+        M_BH=1e8, bands={"g": 4770.0}, n_obs_per_band=15, n_freq=6, n_tau=30, seed=0,
+    )
+    ef = EchoFit(M_BH=1e8, title="dense_mass_resume_test", output_dir=str(tmp_path))
+    d = data["bands"]["g"]
+    ef.add_lightcurve("g", wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
+    ef.build_grid(n_freq=6, n_tau=30)
+    ef.fit(rng_seed=0, num_warmup=5, num_samples=10, checkpoint_every=5, dense_mass=True, progress_bar=False)
+    assert ef._fit_config["dense_mass"] is True
+
+    ef2 = EchoFit.resume("dense_mass_resume_test", output_dir=str(tmp_path))
+    assert ef2._fit_config["dense_mass"] is True
+    ef2.fit(progress_bar=False)
+    assert len(ef2.samples["log_mdot"]) == 10
 
 
 def test_save_chains_falls_back_gracefully_when_netcdf_write_fails(tmp_path, monkeypatch):

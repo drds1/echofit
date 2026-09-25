@@ -72,17 +72,45 @@ site's public meaning.
 
 Fixed-parameter note: `fixed_params` (`EchoFit(fixed_params={...})`) lets
 any of this model's scalar sites (`sigma_drw`, `tau_drw`, `log_mdot`,
-`inclination`, `S_driver`, `C_driver`, `S_{band}`, `C_{band}`, and
-free-lag bands' `tau_{band}`) be held at a known value instead of
-inferred, e.g. `fixed_params={"inclination": 0.0}` to assume a face-on
-disk while fitting everything else. This generalises decision #3's
-"`M_BH` is always fixed" to any parameter a caller already knows or wants
-to hold fixed for a particular fit, via the same mechanism throughout
-(`_param`: substitute a `numpyro.deterministic` constant for the
-`numpyro.sample` call) rather than a bespoke flag per parameter. A fixed
-`inclination` bypasses the `cos_inclination` reparameterisation above
-entirely -- the fixed value is used directly, in degrees, matching how
-every other caller of `inclination` already expects it.
+`inclination`, `S_driver`, `C_driver`, `S_{band}`, `C_{band}`, free-lag
+bands' `tau_{band}`, and any band/driver's `sigma_scale_{name}`/
+`sigma_jitter_{name}` if its error model is turned on, see below) be held
+at a known value instead of inferred, e.g. `fixed_params={"inclination":
+0.0}` to assume a face-on disk while fitting everything else. This
+generalises decision #3's "`M_BH` is always fixed" to any parameter a
+caller already knows or wants to hold fixed for a particular fit, via the
+same mechanism throughout (`_param`: substitute a `numpyro.deterministic`
+constant for the `numpyro.sample` call) rather than a bespoke flag per
+parameter. A fixed `inclination` bypasses the `cos_inclination`
+reparameterisation above entirely -- the fixed value is used directly, in
+degrees, matching how every other caller of `inclination` already expects
+it.
+
+Error-model note: each band (and the driver light curve, if registered)
+can optionally fit its own error rescaling, via `EchoFit.add_lightcurve(...,
+fit_error_model=True)` (default `False`, off, exactly today's behaviour --
+this is opt-in per light curve, not a global switch). When on, the
+band's/driver's reported `yerr` is treated as only approximately correct
+and combined with two extra nuisance parameters into an effective sigma:
+
+    sigma_eff = sqrt((sigma_scale * yerr)**2 + sigma_jitter**2)
+
+`sigma_scale_{name}` (`LogNormal(0, 0.5)`, median 1: "no rescaling" is the
+prior's own central value) multiplicatively rescales the whole error
+array, and `sigma_jitter_{name}` (`HalfNormal(mean(yerr))`, i.e. anchored
+to that light curve's own typical quoted error, the same data-anchoring
+philosophy as `sigma_drw`'s prior, decision #13) adds a constant "floor"
+variance term. This is a direct, checked adaptation of the author's
+PhD-era CREAM Fortran code's own `sigexpand`/`varexpand` nuisance
+parameters (`cream_f90.f90`, `ernew2 = (er(it)*fnow)**2 + varnow`,
+confirmed by reading the source -- see decision #18 and
+`docs/mcmc_implementation.md`), for the same reason it exists there: real
+quoted photometric/measurement errors are often mis-calibrated (too small
+or too large), and fitting the rescaling instead of trusting `yerr`
+verbatim avoids an overconfident (or underconfident) posterior on
+everything else. Off by default per light curve so synthetic-data fits
+(where `yerr` genuinely is correct by construction) and any existing
+analysis keep exactly today's likelihood unless explicitly opted in.
 """
 
 from __future__ import annotations
@@ -142,16 +170,22 @@ def reverberation_model(
         (may be ``None`` otherwise) if at least one band uses
         ``lag_mode="physical"``.
     bands : dict
-        Mapping ``band_name -> {"t", "y", "yerr", "wavelength", "lag_mode"}``
-        for each observed light curve. ``lag_mode`` is ``"physical"`` (mean
-        lag tied to the shared ``log_mdot`` via ``lag_scaling``) or
-        ``"free"`` (an independently inferred ``tau_{band_name}``) -- see
-        the module docstring's identifiability note for when ``"free"``
-        needs a ``driver`` to be identifiable.
+        Mapping ``band_name -> {"t", "y", "yerr", "wavelength", "lag_mode",
+        "fit_error_model"}`` for each observed light curve. ``lag_mode`` is
+        ``"physical"`` (mean lag tied to the shared ``log_mdot`` via
+        ``lag_scaling``) or ``"free"`` (an independently inferred
+        ``tau_{band_name}``) -- see the module docstring's identifiability
+        note for when ``"free"`` needs a ``driver`` to be identifiable.
+        ``fit_error_model`` (optional, default ``False``) turns on that
+        band's ``sigma_scale_{band_name}``/``sigma_jitter_{band_name}`` --
+        see the module docstring's "error-model" note.
     driver : dict, optional
-        ``{"t", "y", "yerr"}`` for a light curve that directly (zero-lag)
-        observes the driver itself, e.g. an X-ray/lamppost continuum, or a
-        directly-monitored AGN continuum anchoring an emission-line fit.
+        ``{"t", "y", "yerr", "fit_error_model"}`` for a light curve that
+        directly (zero-lag) observes the driver itself, e.g. an
+        X-ray/lamppost continuum, or a directly-monitored AGN continuum
+        anchoring an emission-line fit. ``fit_error_model`` works the same
+        way as for a band, turning on ``sigma_scale_driver``/
+        ``sigma_jitter_driver``.
     sigma_drw_prior_scale : float
         Scale of ``sigma_drw``'s ``HalfNormal`` prior. ``EchoFit`` sets this
         from the registered light curves' own data (see
@@ -199,7 +233,13 @@ def reverberation_model(
         C_driver = _param("C_driver", dist.Normal(0.0, 5.0))
         y_pred_driver = S_driver * driver_at(S, C, freqs, driver["t"]) + C_driver
         numpyro.deterministic("y_pred_driver", y_pred_driver)
-        numpyro.sample("obs_driver", dist.Normal(y_pred_driver, driver["yerr"]), obs=driver["y"])
+        if driver.get("fit_error_model", False):
+            sigma_scale_driver = _param("sigma_scale_driver", dist.LogNormal(0.0, 0.5))
+            sigma_jitter_driver = _param("sigma_jitter_driver", dist.HalfNormal(jnp.mean(driver["yerr"])))
+            sigma_eff_driver = jnp.sqrt((sigma_scale_driver * driver["yerr"]) ** 2 + sigma_jitter_driver ** 2)
+        else:
+            sigma_eff_driver = driver["yerr"]
+        numpyro.sample("obs_driver", dist.Normal(y_pred_driver, sigma_eff_driver), obs=driver["y"])
 
     # -- shared physical reprocessing parameters (physical-mode bands only) --
     if any(d["lag_mode"] == "physical" for d in bands.values()):
@@ -243,8 +283,14 @@ def reverberation_model(
         y_pred = S_band * echo + C_band
 
         numpyro.deterministic(f"y_pred_{band_name}", y_pred)
+        if d.get("fit_error_model", False):
+            sigma_scale = _param(f"sigma_scale_{band_name}", dist.LogNormal(0.0, 0.5))
+            sigma_jitter = _param(f"sigma_jitter_{band_name}", dist.HalfNormal(jnp.mean(d["yerr"])))
+            sigma_eff = jnp.sqrt((sigma_scale * d["yerr"]) ** 2 + sigma_jitter ** 2)
+        else:
+            sigma_eff = d["yerr"]
         numpyro.sample(
             f"obs_{band_name}",
-            dist.Normal(y_pred, d["yerr"]),
+            dist.Normal(y_pred, sigma_eff),
             obs=d["y"],
         )
