@@ -682,11 +682,21 @@ and package layout.
     wall time before sampling starts) that's better left as an explicit choice than a silent default change.
     `docs/mcmc_implementation.md` covers the whole mechanism (the mass matrix, why NUTS needs gradients at
     all, JIT compilation) with real before/after charts (`scripts/plot_dense_mass_comparison.py` regenerates
-    them), and an honest comparison to the original CREAM Fortran implementation -- honest in the sense that
-    it only claims what's actually been checked (the physics formulas, the precompute-template trick, the
-    prior-anchoring mechanism, all already covered elsewhere in this file), and is explicit that the
-    Fortran's own sampling algorithm hasn't been inspected in this codebase's own investigation, rather than
-    guessing at a specific comparison.
+    them), and a comparison to the original CREAM Fortran implementation checked directly against
+    `cream_f90.f90`'s own sampling loop, not assumed: its default (`mcmcmulti_iteration`) is single-site
+    random-scan Metropolis-Hastings (a Gaussian random-walk proposal on one parameter at a time, standard
+    Metropolis accept/reject, crude accept/reject-streak step-size doubling/halving), and it turns out to
+    have a genuine, independently-arrived-at analogue to `dense_mass` (`affine_step`, opt-in via a
+    `cream_affine.par` file, only active every other iteration, only for a hand-picked parameter subset):
+    eigendecompose that subset's empirical covariance and propose a joint step along its principal axes,
+    the same "align the proposal with correlations, not just per-parameter scale" idea `dense_mass` applies
+    automatically to every parameter. The difference that remains is gradients: `affine_step` is still a
+    blind random draw within the right-shaped geometry, while NUTS's leapfrog dynamics move along the
+    log-posterior's gradient at every step, which is the standard, well-established reason HMC/NUTS-family
+    samplers need far fewer posterior evaluations than Metropolis-Hastings-family ones in a correlated,
+    moderate-to-high-dimensional posterior like this one's (tens of driver Fourier coefficients alone). No
+    head-to-head `echofit`-vs-`pycecream` wall-clock benchmark has been run; the comparison above is of the
+    two mechanisms, verified against the Fortran source, not a benchmark of the two actual codebases.
 
 ## Known rough edges / things to check before trusting results on real data
 

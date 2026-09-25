@@ -154,26 +154,91 @@ documented in CLAUDE.md where they were introduced:
   Starkey, Horne & Villforth (2016) eq. 12, the same quantity CREAM's own
   BOF terms track.
 
-**What this document can't honestly claim**, because it hasn't been
-checked line-by-line the way the physics and these specific mechanisms
-were: exactly which sampling algorithm `cream_f90.f90` itself used to
-explore parameter space, and therefore a precise, source-verified
-before/after comparison of sampler efficiency. What can be said with
-reasonable confidence, as general context rather than a specific claim
-about that file: gradient-based samplers like HMC/NUTS became practical
-for arbitrary, complex scientific models largely *because of* modern
-automatic-differentiation frameworks (JAX here; also Stan, PyMC, TensorFlow
-Probability elsewhere) computing exact gradients through arbitrary code
-without a hand-derived formula. Scientific Fortran code from the CREAM
-era predates widespread practical autodiff for this kind of model, and
-gradient-free approaches (single- or block-parameter Metropolis-Hastings,
-Gibbs-style updates) were the standard tool available at the time -- these
-generally need many more posterior evaluations than a well-tuned NUTS
-chain to explore a comparably high-dimensional, correlated posterior,
-since each proposal uses no local gradient information at all. If you can
-point to the specific sampling routine in `cream_f90.f90`, it's worth
-adding a precise, checked comparison here rather than leaving this
-section at the general level.
+The sampling algorithm itself is a genuinely different comparison, and
+this section is now checked directly against `cream_f90.f90`'s own
+sampling loop (`mcmcmulti_iteration`) and its covariance-aware proposal
+mode (`affine_step`), not a general assumption about "old vs. new".
+
+### The default algorithm: single-site random-scan Metropolis-Hastings
+
+`mcmcmulti_iteration`'s main loop (`do ip_idx=1,NP`) cycles through every
+parameter **one at a time** each iteration (optionally in a randomised
+order each pass, the "random scan" variant of Metropolis-within-Gibbs, per
+the routine's own comment citing
+[bayesian-inference.com/mcmcmwg](http://www.bayesian-inference.com/mcmcmwg)),
+proposing a symmetric Gaussian random-walk step for that one parameter
+alone:
+
+```fortran
+p(ip) = p(ip) + rang(0., pscale(ip), iseed)   ! rang = Box-Muller Gaussian deviate
+```
+
+and accepting or rejecting it with the standard Metropolis rule:
+
+```fortran
+if ( (bofnew < bofold) .or. (exp(-0.5*(bofnew-bofold)/T_ann) > ran3(iseed)) ) then
+    ! accept
+```
+
+`T_ann` (a simulated-annealing temperature) defaults to `1.0` unless a
+separate `cream_anneal.par` file is present to opt into annealing, so by
+default this is the textbook Metropolis-Hastings acceptance probability
+(BOF is `-2*log(posterior)` up to a constant, the same relationship
+CLAUDE.md decision #11 uses for `plot_bof`'s Badness-of-Fit trace). Each
+parameter's own proposal width (`pscale(ip)`) is adapted with a simple
+doubling-after-a-streak-of-accepts / halving-after-a-streak-of-rejects
+rule, a much cruder heuristic than NUTS's dual-averaging step-size
+adaptation during warmup.
+
+### A genuine analogue to `dense_mass`: "affine stepping"
+
+The Fortran code also has a second, opt-in proposal mode (`affine_step`),
+active only every other iteration and only for parameters named in a
+`cream_affine.par` file the user must create. For that named subset, it
+estimates their empirical covariance matrix from past samples,
+eigendecomposes it (`call jacobi(cov, np, np, eval, evec, nrot)`), and
+draws a **joint** Gaussian step aligned with that covariance's principal
+axes rather than one parameter at a time:
+
+```fortran
+gaus_0_v(ipc) = rang(0., sqrt(eval(ipc)), iseed)          ! step along each eigen-direction
+pnew(ipc) = sum(evec(ipc,:) * gaus_0_v(:)) + mean(ipc)    ! rotate back to parameter space
+```
+
+This is, conceptually, the same core idea `dense_mass=True` implements for
+NUTS: don't just rescale each parameter independently, rotate the proposal
+to match the posterior's actual correlation structure. It's a real,
+independently-arrived-at precedent for fixing the same kind of problem
+`dense_mass` fixes here, just applied to a random-walk Metropolis step
+rather than a Hamiltonian trajectory, and manually opt-in for a
+hand-picked subset of parameters rather than automatic across every
+parameter the way `dense_mass=True` is.
+
+### The difference that remains: gradients
+
+Both mechanisms solve "align the proposal geometry with the posterior's
+correlations." What `affine_step` can't do, because it's still a plain
+random-walk Metropolis step, is use the **gradient** of the log-posterior
+to pick a promising direction rather than a random one within that
+geometry. NUTS's leapfrog dynamics move along the gradient at every step,
+so even after the mass matrix has fixed the geometry, the trajectory is
+purposeful, not a blind draw that then needs an accept/reject test. This
+is the standard, well-established reason (not specific to this comparison)
+HMC/NUTS-family samplers generally need far fewer posterior evaluations
+than Metropolis-Hastings-family samplers to explore a correlated,
+moderate-to-high-dimensional posterior (see e.g. Neal 2011, "MCMC using
+Hamiltonian dynamics"; Betancourt 2017, "A Conceptual Introduction to
+Hamiltonian Monte Carlo") -- this codebase's own driver alone has
+`n_freq` frequencies times two Fourier coefficients each (tens of
+parameters at typical settings), on top of the handful of physical
+parameters.
+
+**What still hasn't been done**: a head-to-head wall-clock comparison
+between `echofit` and `pycecream` fitting the same real dataset. That
+would need `pycecream` actually installed and run, which is separate work
+from reading its source; the claims above are about the two *mechanisms*,
+verified directly against `cream_f90.f90`, not a benchmark of the two
+actual codebases.
 
 ## 6. Practical guidance
 
