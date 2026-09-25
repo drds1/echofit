@@ -42,6 +42,7 @@ Regenerate with `python scripts/make_fit_animation.py`.*
 - [📈 Fitting your own light curves, with saved/resumable runs](#-fitting-your-own-light-curves-with-savedresumable-runs)
   - [🖥️ Command file for running real light curve campaigns](#-command-file-for-running-real-light-curve-campaigns)
   - [🐍 From Python directly](#-from-python-directly)
+- [📡 Real-data worked example: NGC 5548 (AGN STORM)](#-real-data-worked-example-ngc-5548-agn-storm)
 - [🧪 Visual smoke test](#-visual-smoke-test)
 - [✅ Tests and coverage](#-tests-and-coverage)
 - [⏱️ Performance profiling](#-performance-profiling)
@@ -507,6 +508,53 @@ variable, then `./outputs` (relative to wherever you run your script from).
 
 Without `title=`, `EchoFit` behaves exactly as in the Quickstart above --
 nothing is written to disk.
+
+## 📡 Real-data worked example: NGC 5548 (AGN STORM)
+
+Everything above uses synthetic data. **`scripts/run_ngc5548_fit.sh`** is
+the same command-file pattern applied to a real dataset: NGC 5548's AGN
+STORM continuum monitoring campaign (Fausnaugh, Denney, Barth, et al.
+2016, ApJ 821, 56, "Space Telescope and Optical Reverberation Mapping
+Project III" -- D. Starkey is a co-author), downloaded directly from
+VizieR (catalog
+[J/ApJ/821/56](https://cdsarc.cds.unistra.fr/viz-bin/ReadMe/J/ApJ/821/56)).
+Run it directly:
+
+```bash
+./scripts/run_ngc5548_fit.sh
+```
+
+**Step 1** (`scripts/download_ngc5548_storm_data.py`) downloads and
+reshapes the real data into 13 bands' worth of `t y yerr` text files,
+ready for `fit_lightcurves.py`:
+
+- **9 ground-based optical filters** (Johnson/Cousins BVRI, SDSS ugriz),
+  nearly daily cadence from 16 observatories, Jan-Jul 2014.
+- **4 HST/COS UV continuum windows** (1157.5, 1367, 1478.5, 1746 Å).
+
+Wavelengths used are the paper's own Table 5 pivot wavelengths (computed
+from each filter's actual response curve), not a generic external
+reference. This is real, irregular-cadence, multi-observatory data with
+real gaps and systematics -- exactly the shape `lag_mode="physical"` is
+built for, spanning ~1160-9160 Å, with a well-documented literature result
+to sanity-check a fit against (lags follow the λ^(4/3) disk-reprocessing
+scaling, but imply a disk ~3x larger than standard thin-disk theory
+predicts).
+
+**Step 2** is a fast 4-band look (UV, u, g, z; no checkpointing) to check
+the pipeline runs end to end on real data first. **Step 3** is the full
+13-band managed/resumable fit (`--dense-mass`, since a model this size --
+13 bands' worth of `S_band`/`C_band` plus the driver's own Fourier
+coefficients -- benefits from it the same way the synthetic benchmarks in
+`CLAUDE.md` decision #17 do); expect this one to take a while. **Step 4**
+resumes it, the same pattern as `run_example_fit.sh`.
+
+**On `M_BH`**: NGC 5548's black hole mass is genuinely uncertain across
+the literature (the campaign itself caught NGC 5548 in an unusual
+"BLR holiday" state) -- the script's example uses `5e7` solar masses (a
+commonly cited classic value), not a recommendation. Check the current
+literature and pick a value deliberately, the same way you would for any
+of your own real data.
 
 ## 🧪 Visual smoke test
 

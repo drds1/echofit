@@ -225,3 +225,8 @@ diagnostic_run/
 # scripts/profile_pipeline.py output -- a one-off performance snapshot,
 # regenerate it rather than committing a copy that goes stale.
 profiling_output/
+
+# scripts/download_ngc5548_storm_data.py / scripts/run_ngc5548_fit.sh output
+# -- real downloaded data + fit output, not something to commit.
+ngc5548_storm_data/
+ngc5548_quick_look/
