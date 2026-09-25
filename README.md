@@ -32,6 +32,7 @@ Regenerate with `python scripts/make_fit_animation.py`.*
 
 - [🔭 Background](#-background)
 - [🌀 Model](#-model)
+  - [Random-walk vs. damped random-walk driver prior](#random-walk-vs-damped-random-walk-driver-prior)
 - [📦 Package layout](#-package-layout)
 - [⚙️ Install](#-install)
   - [🐍 1. Check you have Python 3.10 or newer](#-1-check-you-have-python-310-or-newer)
@@ -125,12 +126,15 @@ Each band's observed light curve is modelled as
 y_band(t) = S_band * ∫ X(t - τ) ψ(τ, λ_band, θ) dτ + C_band + ε
 ```
 
-- **Driver `X(t)`**: a damped random walk (DRW), represented as a truncated
+- **Driver `X(t)`**: a stochastic process, represented as a truncated
   Fourier series `X(t) = Σ_k [S_k sin(w_k t) + C_k cos(w_k t)]` on a fixed
   frequency grid. The sine/cosine amplitudes `S_k, C_k` are given Gaussian
-  priors matching the DRW's Lorentzian power spectrum, so the two DRW
-  hyperparameters `sigma_drw` (variability amplitude) and `tau_drw` (damping
-  timescale) are inferred directly alongside the amplitudes.
+  priors matching a target power spectrum -- by default a pure random-walk
+  (RW) power law, `P(w) = sigma_drw**2 / w**2`, with `sigma_drw` (amplitude)
+  the only hyperparameter; pass `EchoFit(drw_prior=True)` for the original
+  damped random walk (DRW) instead, a Lorentzian power spectrum with a
+  second hyperparameter, `tau_drw` (damping timescale), inferred alongside
+  `sigma_drw`. See "Random-walk vs. damped random-walk driver prior" below.
 - **Response `ψ(τ, λ, θ)`**: a causal (`τ ≥ 0`), positive, skew-normal
   function. Its mean lag follows the standard thin-disk reprocessing scaling
 
@@ -151,9 +155,9 @@ y_band(t) = S_band * ∫ X(t - τ) ψ(τ, λ_band, θ) dτ + C_band + ε
   at any set of observation times is then a single vectorised matrix
   contraction: no loop over `(t_obs, τ)` pairs, and no loop over bands.
 
-Only these are inferred: `log_mdot`, `inclination`, `sigma_drw`, `tau_drw`,
-the driver Fourier coefficients `{S_k, C_k}`, and per-band `{S_band, C_band}`.
-**`M_BH` is always a fixed input.**
+Only these are inferred: `log_mdot`, `inclination`, `sigma_drw`, the driver
+Fourier coefficients `{S_k, C_k}`, and per-band `{S_band, C_band}` --
+`tau_drw` too if `drw_prior=True`. **`M_BH` is always a fixed input.**
 
 **Any of those (except `M_BH`, always fixed) can be fixed too**, via
 `EchoFit(fixed_params={...})`, e.g. to assume a face-on disk and make the
@@ -162,6 +166,28 @@ remaining parameters easier to solve for:
 ```python
 ef = EchoFit(M_BH=1e8, fixed_params={"inclination": 0.0})
 ```
+
+### Random-walk vs. damped random-walk driver prior
+
+`EchoFit(drw_prior=False)` (the default) uses a pure random-walk power law
+for the driver's power spectrum; `EchoFit(drw_prior=True)` uses the original
+damped random walk (a Lorentzian that flattens below `1/tau_drw` and falls
+as `w^-2` above it). Switching is a single constructor argument:
+
+```python
+ef = EchoFit(M_BH=1e8, drw_prior=True)   # DRW: tau_drw inferred too
+ef = EchoFit(M_BH=1e8)                   # RW (default): no tau_drw at all
+```
+
+This isn't implemented as "fix `tau_drw` to a large constant" (the
+seemingly obvious way to remove the DRW's turnover) -- that limit sends
+the power spectrum to *zero* everywhere at fixed `sigma_drw`, not to a
+finite power law, unless `sigma_drw`'s own prior is separately rescaled to
+compensate. `rw_prior_scale` writes the `1/w**2` power law directly
+instead: exact, no large-constant tuning, no `tau_drw` site at all in RW
+mode, and `sigma_drw` keeps the same site name and the same data-anchored
+prior either way (see `model.py`'s "random-walk prior" note and
+`CLAUDE.md` decision #19 for the full derivation).
 
 Works the same way for free-lag bands' `tau_{band}` (see "Emission-line /
 free-lag mode" below) if you already know a line's lag and want to hold it
@@ -822,12 +848,13 @@ for a worked example.
 
 This is a research scaffold, not a validated production pipeline:
 
-- The Fourier-series driver with DRW-matched priors is an approximation to a
-  true DRW Gaussian process (a spectral / Hilbert-space GP approximation),
-  not an exact DRW likelihood (e.g. via a Kalman filter). It's fast and
-  differentiable, which is the point, but you should sanity-check recovered
-  `sigma_drw` / `tau_drw` against known DRW literature values for your
-  targets.
+- The Fourier-series driver with DRW-matched priors (`drw_prior=True`) is an
+  approximation to a true DRW Gaussian process (a spectral / Hilbert-space
+  GP approximation), not an exact DRW likelihood (e.g. via a Kalman
+  filter). It's fast and differentiable, which is the point, but you should
+  sanity-check recovered `sigma_drw` / `tau_drw` against known DRW
+  literature values for your targets. The default `drw_prior=False`
+  (random-walk) prior has no damping timescale to validate against at all.
 - The skew-normal response is one reasonable causal, positive, skewable
   parametric family; it is not derived from full disk radiative-transfer
   physics.
@@ -835,11 +862,13 @@ This is a research scaffold, not a validated production pipeline:
   forward model to generate and fit data (a "self-consistency" check), which
   validates the code but is not a substitute for validation against real
   reverberation-mapping campaigns or independent simulations.
-- On the synthetic recovery test in `tests/test_recovery.py`, `log_mdot`
-  (which sets the mean lag) recovers well, but `inclination`, `sigma_drw`,
-  and `tau_drw` recover only loosely (wide/biased posteriors) even with zero
-  divergent transitions: NUTS tends to spend most samples at its
-  max-tree-depth ceiling on this model. Treat those three parameters'
+- On the synthetic recovery test in `tests/test_recovery.py` (run with
+  `drw_prior=True` to exercise `tau_drw`), `log_mdot` (which sets the mean
+  lag) recovers well, but `inclination`, `sigma_drw`, and `tau_drw` recover
+  only loosely (wide/biased posteriors) even with zero divergent
+  transitions: NUTS tends to spend most samples at its max-tree-depth
+  ceiling on this model (`dense_mass=True` substantially reduces this --
+  see decision #17). Treat those three parameters'
   posteriors with extra scepticism on real data until this is investigated
   further; `EchoFit.fit()` exposes `max_tree_depth` and `chain_method` if
   you want to bound worst-case sampling cost or add cheap diagnostic chains

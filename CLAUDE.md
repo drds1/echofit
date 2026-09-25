@@ -734,6 +734,53 @@ and package layout.
     correctly, both needed fixing, both are covered by
     `tests/test_error_model.py::test_error_model_persists_across_resume`.
 
+19. **The driver's prior defaults to a pure random-walk (RW) power law, not the original damped random walk
+    (DRW), a direct, explicit request.** `EchoFit(drw_prior=False)` (the new default) gives the driver's
+    Fourier coefficients a plain `1/w**2` power-law power spectrum via the new `model.rw_prior_scale`, only
+    `sigma_drw` inferred, no `tau_drw` site at all. `EchoFit(drw_prior=True)` restores the original DRW
+    prior (`model.drw_prior_scale`, a Lorentzian, `tau_drw` inferred alongside `sigma_drw`). Motivation: for
+    the short, irregularly-sampled campaigns this package targets, `tau_drw` is often weakly identified
+    anyway (the "Known rough edges" note below already flagged this), and a plain power law is one fewer
+    hyperparameter to identify for the same qualitative "smooth stochastic variability" driver.
+
+    **This is deliberately not implemented as "fix `tau_drw` to a large constant inside `drw_prior_scale`"**,
+    the seemingly obvious way to remove the DRW's turnover (push it to `w -> 0`) -- confirmed directly, not
+    assumed, that this doesn't work: the Lorentzian's large-`tau_drw` limit at *fixed* `sigma_drw` is
+    `sigma_drw**2 * tau_drw / (w*tau_drw)**2 = sigma_drw**2 / (tau_drw * w**2) -> 0` as `tau_drw -> infinity`,
+    i.e. the power spectrum collapses to *zero* everywhere, not to a finite power law. Getting a genuine,
+    non-trivial `1/w**2` law that way needs `sigma_drw**2 / tau_drw` held fixed as `tau_drw` grows, meaning
+    `sigma_drw`'s own prior would need rescaling to compensate for whatever constant `tau_drw` was fixed
+    to -- fragile, and coupled to the specific constant chosen. `rw_prior_scale` writes the `1/w**2` form
+    directly instead: exact, no large-constant tuning, no `tau_drw` site or rescaling needed at all, and
+    `sigma_drw` keeps the *same* site name and the *same* data-anchored prior (`EchoFit._sigma_drw_prior_scale`,
+    decision #13) in both modes -- though its physical meaning differs (a saturating asymptotic variability
+    scale for the DRW; a non-saturating power-law amplitude for the RW, since a pure random walk's variance
+    grows without bound rather than saturating).
+
+    Threaded through the same way `fixed_params` was (decision #15): a plain constructor argument
+    (`EchoFit(drw_prior=...)`), persisted across checkpointed runs via `manifest.json`/`EchoFit.resume()` (a
+    fresh instance of the exact bug class decisions #15/#18 already hit twice -- caught this time by writing
+    the resume-persistence test *before* declaring the feature done, not after a report of it silently
+    reverting to the default), and exposed as `scripts/fit_lightcurves.py --drw-prior`.
+    `_valid_fixed_param_names()` only includes `"tau_drw"` when `drw_prior=True`, so
+    `fixed_params={"tau_drw": ...}` correctly raises rather than silently doing nothing when there's no such
+    site to fix. `plotting.plot_power_spectrum` takes `tau_drw_samples` as `Optional` now: given (DRW fits)
+    it overlays the fitted Lorentzian as before; omitted (RW fits, the default) it overlays the fitted
+    `sigma_drw**2/w**2` power law instead, both against the same empirical `P(w) = (S**2+C**2)/(2*dw)`
+    estimate and the same `w**-2` reference line.
+
+    **A real, wide ripple effect from flipping the default, not a self-contained change:** every existing
+    call site that unconditionally read `ef.samples["tau_drw"]` assuming it always existed would have broken
+    the moment the default flipped -- found and fixed across `tests/test_recovery.py` (now explicitly passes
+    `drw_prior=True`, since that test specifically validates DRW hyperparameter recovery),
+    `tests/test_fixed_params_and_priors.py`, `scripts/smoke_test.py`'s printed diagnostic table (now skips
+    `tau_drw` if absent instead of guarding nothing), and `scripts/plot_dense_mass_comparison.py`/
+    `scripts/profile_pipeline.py` (both explicitly pinned to `drw_prior=True`, since their whole point is
+    reproducing the *exact* numbers already written up in decisions #9/#17, measured before this decision
+    existed -- not a claim DRW is still the default). `tests/test_rw_prior.py` adds dedicated coverage for
+    the new default path itself (site presence, `fixed_params` validation, resume persistence, plotting,
+    and a `log_mdot` recovery check at the same rigour `test_recovery.py` already held the DRW path to).
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model

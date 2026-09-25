@@ -44,24 +44,29 @@ def _make_synthetic(seed: int):
     )
 
 
-def _build_echofit(data):
-    ef = EchoFit(M_BH=data["truth"]["M_BH"])
+def _build_echofit(data, drw_prior: bool = False):
+    ef = EchoFit(M_BH=data["truth"]["M_BH"], drw_prior=drw_prior)
     for name, d in data["bands"].items():
         ef.add_lightcurve(name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
     ef.build_grid(n_freq=15, n_tau=100)
     return ef
 
 
-def _fit_synthetic(seed: int):
+def _fit_synthetic(seed: int, drw_prior: bool = False):
     data = _make_synthetic(seed)
-    ef = _build_echofit(data)
+    ef = _build_echofit(data, drw_prior=drw_prior)
     ef.fit(rng_seed=0, num_warmup=500, num_samples=500, num_chains=1, progress_bar=False)
     return ef, data
 
 
 @pytest.mark.slow
 def test_mcmc_recovers_synthetic_truth():
-    ef, data = _fit_synthetic(seed=2)
+    # drw_prior=True: this test specifically checks tau_drw recovery/
+    # finiteness (CLAUDE.md decision #19's "Known rough edges" note this
+    # docstring already describes), which only exists as a site under the
+    # DRW prior -- the default drw_prior=False (random-walk) has no
+    # tau_drw at all. See test_rw_prior.py for default-prior coverage.
+    ef, data = _fit_synthetic(seed=2, drw_prior=True)
     truth = data["truth"]
 
     # -- sampling health -------------------------------------------------

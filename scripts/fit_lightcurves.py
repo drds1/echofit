@@ -111,6 +111,15 @@ def _parse_args():
             "if it's above a few percent."
         ),
     )
+    parser.add_argument(
+        "--drw-prior", action="store_true",
+        help=(
+            "Use the original damped random walk (DRW) driver prior (tau_drw "
+            "inferred alongside sigma_drw) instead of the default pure "
+            "random-walk (RW) power-law prior (sigma_drw only, no tau_drw "
+            "site) -- see CLAUDE.md decision #19."
+        ),
+    )
     parser.add_argument("--rng-seed", type=int, default=0)
     parser.add_argument("--checkpoint-every", type=int, default=100, help="Only used with --title.")
     parser.add_argument("--report-every", type=int, default=None, help="Only used with --title -- refresh report.html every this many new samples.")
@@ -137,7 +146,7 @@ def main():
     if not args.band and not args.free_lag_band:
         raise SystemExit("Add at least one --band or --free-lag-band.")
 
-    ef = EchoFit(M_BH=args.m_bh, title=args.title, output_dir=args.output_dir)
+    ef = EchoFit(M_BH=args.m_bh, title=args.title, output_dir=args.output_dir, drw_prior=args.drw_prior)
     for name, wavelength, path in args.band:
         t, y, yerr = _load_lightcurve(path)
         ef.add_lightcurve(name, wavelength=float(wavelength), t=t, y=y, yerr=yerr)

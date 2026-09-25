@@ -141,7 +141,11 @@ def _run_ngc5548(args):
     print(f"Divergent transitions: {n_div}/{len(diverging)} ({div_frac:.0%})")
     print(f"All sample values finite: {all_finite}")
     print(f"\n{'parameter':<14}{'mean':>10}{'std':>10}")
+    # tau_drw only exists as a site if this fit used drw_prior=True (see
+    # CLAUDE.md decision #19); the default random-walk prior has no such site.
     for name in ["log_mdot", "inclination", "sigma_drw", "tau_drw"]:
+        if name not in ef.samples:
+            continue
         s = np.asarray(ef.samples[name])
         print(f"{name:<14}{s.mean():>10.3f}{s.std():>10.3f}")
 

@@ -258,26 +258,30 @@ def plot_power_spectrum(
     S_samples: np.ndarray,
     C_samples: np.ndarray,
     sigma_drw_samples: np.ndarray,
-    tau_drw_samples: np.ndarray,
+    tau_drw_samples: Optional[np.ndarray] = None,
     figsize=(7, 5),
 ):
-    """Posterior driver power spectrum vs. the DRW prior it was drawn under.
+    """Posterior driver power spectrum vs. the prior it was drawn under.
 
     The empirical periodogram-style estimate per posterior draw is
     ``P(w_k) = (S_k**2 + C_k**2) / (2 * dw_k)``, where ``dw_k`` is the local
-    frequency-grid spacing -- matching how ``model.drw_prior_scale`` sets
-    ``Var(S_k) = Var(C_k) = power(w_k) * dw_k`` in the first place, so this
-    is directly comparable to the Lorentzian ``power(w)`` curve overlaid
-    from the same posterior draws' ``sigma_drw``/``tau_drw``. Since ``freqs``
-    is log-spaced (geomspace), skipping the ``dw_k`` normalisation would
-    flatten the apparent log-log slope purely from the growing bin width at
-    high frequency -- not a real physical effect.
+    frequency-grid spacing -- matching how ``model.drw_prior_scale``/
+    ``model.rw_prior_scale`` set ``Var(S_k) = Var(C_k) = power(w_k) * dw_k``
+    in the first place, so this is directly comparable to the fitted
+    ``power(w)`` curve overlaid from the same posterior draws. Since
+    ``freqs`` is log-spaced (geomspace), skipping the ``dw_k`` normalisation
+    would flatten the apparent log-log slope purely from the growing bin
+    width at high frequency -- not a real physical effect.
 
-    A DRW's power spectrum is Lorentzian, ``power(w) = sigma_drw**2 *
-    tau_drw / (1 + (w*tau_drw)**2)``: flat for ``w << 1/tau_drw``, and
-    falling off as ``w**-2`` (pure random walk / Brownian motion) for
-    ``w >> 1/tau_drw``. A dashed reference line at that ``-2`` slope is
-    overlaid so the high-frequency asymptote is easy to eyeball.
+    ``tau_drw_samples`` given (``drw_prior=True`` fits): the fitted curve is
+    the DRW's Lorentzian, ``power(w) = sigma_drw**2 * tau_drw / (1 +
+    (w*tau_drw)**2)`` -- flat for ``w << 1/tau_drw``, falling off as
+    ``w**-2`` for ``w >> 1/tau_drw``. ``tau_drw_samples`` omitted (the
+    default ``drw_prior=False`` fits): the fitted curve is the pure
+    random-walk power law, ``power(w) = sigma_drw**2 / w**2``, everywhere
+    -- see ``model.py``'s "random-walk prior" note. Either way, a dotted
+    reference line at the ``-2`` slope is overlaid so the high-frequency
+    (DRW) or everywhere (RW) asymptote is easy to eyeball.
 
     Parameters
     ----------
@@ -285,17 +289,25 @@ def plot_power_spectrum(
         Driver angular frequency grid (rad/day).
     S_samples, C_samples : (n_samples, n_freq) array
         Posterior draws of the driver's sine/cosine Fourier coefficients.
-    sigma_drw_samples, tau_drw_samples : (n_samples,) array
-        Posterior draws of the DRW hyperparameters.
+    sigma_drw_samples : (n_samples,) array
+        Posterior draws of the driver amplitude hyperparameter.
+    tau_drw_samples : (n_samples,) array, optional
+        Posterior draws of the DRW damping timescale. Omit for a
+        ``drw_prior=False`` (random-walk) fit, which has no such site.
     """
     dw = np.clip(np.gradient(freqs), 1e-8, None)
     P_samples = (S_samples ** 2 + C_samples ** 2) / (2.0 * dw[None, :])
     plo95, plo68, pmed, phi68, phi95 = np.percentile(P_samples, [2.5, 16, 50, 84, 97.5], axis=0)
 
-    fit_power = (
-        sigma_drw_samples[:, None] ** 2 * tau_drw_samples[:, None]
-        / (1.0 + (freqs[None, :] * tau_drw_samples[:, None]) ** 2)
-    )
+    if tau_drw_samples is not None:
+        fit_power = (
+            sigma_drw_samples[:, None] ** 2 * tau_drw_samples[:, None]
+            / (1.0 + (freqs[None, :] * tau_drw_samples[:, None]) ** 2)
+        )
+        fit_label = "fitted DRW prior (Lorentzian)"
+    else:
+        fit_power = sigma_drw_samples[:, None] ** 2 / freqs[None, :] ** 2
+        fit_label = "fitted RW prior (power law)"
     flo95, flo68, fmed, fhi68, fhi95 = np.percentile(fit_power, [2.5, 16, 50, 84, 97.5], axis=0)
 
     fig, ax = plt.subplots(figsize=figsize)
@@ -308,7 +320,7 @@ def plot_power_spectrum(
     )
 
     ax.fill_between(freqs, flo95, fhi95, color="C0", alpha=0.12)
-    ax.plot(freqs, fmed, color="C0", lw=1.5, ls="--", label="fitted DRW prior (Lorentzian)")
+    ax.plot(freqs, fmed, color="C0", lw=1.5, ls="--", label=fit_label)
 
     w_ref = np.sqrt(freqs[0] * freqs[-1])
     P_ref = np.interp(w_ref, freqs, pmed)
@@ -324,7 +336,7 @@ def plot_power_spectrum(
     ax.set_ylabel(r"$P(\omega)$")
     ax.grid(alpha=0.6, which="both")
     ax.legend(fontsize=8)
-    ax.set_title("Driver power spectrum: posterior vs. fitted DRW prior")
+    ax.set_title("Driver power spectrum: posterior vs. fitted prior")
     fig.tight_layout()
     return fig, ax
 

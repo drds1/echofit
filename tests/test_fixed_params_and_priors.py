@@ -87,10 +87,19 @@ def test_unknown_fixed_param_key_raises():
 
 
 def test_valid_fixed_param_names_covers_physical_and_driver_sites():
-    ef = _build_physical_echofit(_physical_dataset())
+    ef = _build_physical_echofit(_physical_dataset(), drw_prior=True)
     valid = ef._valid_fixed_param_names()
     assert {"sigma_drw", "tau_drw", "log_mdot", "inclination", "S_g", "C_g", "S_i", "C_i"} <= valid
     assert "tau_g" not in valid  # physical-mode bands have no tau_{band} site
+
+
+def test_tau_drw_only_valid_fixed_param_when_drw_prior_is_on():
+    """tau_drw isn't even a real site under the default drw_prior=False
+    (random-walk) prior -- see CLAUDE.md decision #19 -- so it shouldn't
+    be accepted as a fixed_params key either."""
+    ef_rw = _build_physical_echofit(_physical_dataset())  # drw_prior defaults False
+    assert "tau_drw" not in ef_rw._valid_fixed_param_names()
+    assert "sigma_drw" in ef_rw._valid_fixed_param_names()
 
 
 def test_init_strategy_matches_data_mean_and_std_ratio():

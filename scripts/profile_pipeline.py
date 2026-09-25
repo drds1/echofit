@@ -102,7 +102,11 @@ def _build_reference_echofit(seed: int) -> tuple[EchoFit, dict]:
         bands={"g": 4770.0, "i": 7625.0}, t_span=200.0, n_obs_per_band=50,
         n_freq=15, n_tau=100, tau_max=50.0, noise_level=0.05, seed=seed,
     )
-    ef = EchoFit(M_BH=data["truth"]["M_BH"])
+    # drw_prior=True: pinned so this reproduces the exact numbers already
+    # documented in CLAUDE.md decisions #9/#17 (measured before decision
+    # #19 made the random-walk prior the default), not a claim DRW is
+    # still the default.
+    ef = EchoFit(M_BH=data["truth"]["M_BH"], drw_prior=True)
     for name, d in data["bands"].items():
         ef.add_lightcurve(name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
     return ef, data

@@ -69,14 +69,23 @@ class EchoFit:
         Override the output root directory. Only relevant when ``title``
         is given. Otherwise resolved from the ``ECHOFIT_OUTPUT_DIR``
         environment variable, or ``./outputs`` if that's unset too.
+    drw_prior : bool, optional
+        ``False`` (default): the driver's Fourier coefficients follow a
+        pure random-walk (RW) prior (a plain ``1/w**2`` power law, only
+        ``sigma_drw`` inferred, no ``tau_drw`` site). ``True``: the
+        original damped random walk (DRW) prior (a Lorentzian, ``tau_drw``
+        inferred too) -- see ``model.py``'s "random-walk prior" note for
+        why RW is the default and why this isn't the same as fixing
+        ``tau_drw`` to a large constant.
     fixed_params : dict, optional
         ``{site_name: value}`` to hold any of the model's scalar sites
-        (``sigma_drw``, ``tau_drw``, ``log_mdot``, ``inclination``,
-        ``S_driver``, ``C_driver``, ``S_{band}``, ``C_{band}``, or a
-        free-lag band's ``tau_{band}``) fixed instead of inferring it --
-        e.g. ``fixed_params={"inclination": 0.0}`` to assume a face-on
-        disk. The same mechanism as ``M_BH`` (always fixed, decision #3),
-        generalised to any parameter -- see ``model.py``'s "fixed-parameter"
+        (``sigma_drw``, ``tau_drw`` if ``drw_prior=True``, ``log_mdot``,
+        ``inclination``, ``S_driver``, ``C_driver``, ``S_{band}``,
+        ``C_{band}``, or a free-lag band's ``tau_{band}``) fixed instead
+        of inferring it -- e.g. ``fixed_params={"inclination": 0.0}`` to
+        assume a face-on disk. The same mechanism as ``M_BH`` (always
+        fixed, decision #3), generalised to any parameter -- see
+        ``model.py``'s "fixed-parameter"
         docstring note. Validated against the actually-registered
         bands/driver in ``.fit()`` (a key that could never be a real site
         given the current setup raises, to catch typos).
@@ -103,11 +112,12 @@ class EchoFit:
 
     def __init__(
         self, M_BH: Optional[float] = None, title: Optional[str] = None, output_dir: Optional[str] = None,
-        fixed_params: Optional[Dict[str, float]] = None,
+        fixed_params: Optional[Dict[str, float]] = None, drw_prior: bool = False,
     ):
         self.M_BH = float(M_BH) if M_BH is not None else None
         self.title = title
         self.fixed_params: Dict[str, float] = dict(fixed_params) if fixed_params else {}
+        self.drw_prior = bool(drw_prior)
         self.bands: Dict[str, dict] = {}
         self.driver_data: Optional[dict] = None
         self.freqs: Optional[np.ndarray] = None
@@ -275,6 +285,7 @@ class EchoFit:
             bands=bands_jax, driver=driver_jax,
             sigma_drw_prior_scale=self._sigma_drw_prior_scale(),
             fixed_params=self.fixed_params,
+            drw_prior=self.drw_prior,
         )
 
     def _sigma_drw_prior_scale(self) -> float:
@@ -304,7 +315,9 @@ class EchoFit:
         """Every scalar site ``fixed_params`` could actually pin, given the
         bands/driver currently registered -- used to catch typos (a key
         that could never be a real site) before spending time on a fit."""
-        valid = {"sigma_drw", "tau_drw"}
+        valid = {"sigma_drw"}
+        if self.drw_prior:
+            valid.add("tau_drw")
         if self.driver_data is not None:
             valid |= {"S_driver", "C_driver"}
             if self.driver_data.get("fit_error_model", False):
@@ -411,7 +424,7 @@ class EchoFit:
 
         ef = cls(
             M_BH=manifest["M_BH"], title=title, output_dir=output_dir,
-            fixed_params=manifest.get("fixed_params"),
+            fixed_params=manifest.get("fixed_params"), drw_prior=manifest.get("drw_prior", False),
         )
         ef.run_dir = run_dir
         ef._fit_config = manifest["fit_config"]
@@ -594,6 +607,7 @@ class EchoFit:
                     bands={n: d["wavelength"] for n, d in self.bands.items()},
                     fit_config=self._fit_config,
                     fixed_params=self.fixed_params,
+                    drw_prior=self.drw_prior,
                 ))
 
         chunk_samples_so_far, chunk_extra_so_far = [], []
@@ -670,22 +684,25 @@ class EchoFit:
         return plotting.plot_raw_lightcurves(self.bands, driver=self.driver_data, **kwargs)
 
     def plot_power_spectrum(self, **kwargs):
-        """Posterior driver power spectrum vs. the fitted DRW prior shape.
+        """Posterior driver power spectrum vs. the fitted prior shape.
 
         Sanity check that the driver's Fourier coefficients (S, C) are
-        actually behaving like a DRW under the posterior, not just the
-        prior: P(w) = (S**2 + C**2) / (2*dw) should track the fitted
-        Lorentzian (from posterior sigma_drw/tau_drw draws) and flatten
-        into a w**-2 slope above 1/tau_drw.
+        actually behaving like the assumed prior under the posterior, not
+        just the prior itself: P(w) = (S**2 + C**2) / (2*dw) should track
+        the fitted curve -- a Lorentzian (from posterior sigma_drw/tau_drw
+        draws), flattening into a w**-2 slope above 1/tau_drw, if
+        ``drw_prior=True``; a pure w**-2 power law everywhere otherwise
+        (the default -- see model.py's "random-walk prior" note).
         """
         if self.samples is None:
             raise RuntimeError("Call .fit() before plotting the power spectrum.")
+        tau_drw = np.asarray(self.samples["tau_drw"]) if "tau_drw" in self.samples else None
         return plotting.plot_power_spectrum(
             np.asarray(self.freqs),
             np.asarray(self.samples["S"]),
             np.asarray(self.samples["C"]),
             np.asarray(self.samples["sigma_drw"]),
-            np.asarray(self.samples["tau_drw"]),
+            tau_drw,
             **kwargs,
         )
 

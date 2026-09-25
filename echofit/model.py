@@ -4,10 +4,12 @@ model.py
 
 The NumPyro probabilistic model tying together:
 
-* a damped-random-walk (DRW) driver, represented as a truncated Fourier
-  series whose sine/cosine amplitudes are given Gaussian priors matching the
-  DRW's Lorentzian power spectrum (so ``sigma_drw`` and ``tau_drw`` are
-  genuine, interpretable DRW hyperparameters that get inferred);
+* a stochastic driver, represented as a truncated Fourier series whose
+  sine/cosine amplitudes are given Gaussian priors matching a target power
+  spectrum -- by default a pure random-walk (RW) power law (``drw_prior=False``,
+  ``sigma_drw`` the only hyperparameter, inferred), or, when ``drw_prior=True``,
+  a damped random walk (DRW)'s Lorentzian power spectrum (``sigma_drw`` and
+  ``tau_drw`` both inferred) -- see the "random-walk prior" note below;
 * an optional driver light curve, a direct (zero-lag) observation of the
   driver itself -- see the module docstring note on identifiability below;
 * a per-band causal response function -- either the physical, thin-disk-
@@ -19,11 +21,11 @@ The NumPyro probabilistic model tying together:
 * a Gaussian observation likelihood for irregularly sampled multi-band light
   curves.
 
-Inferred, always: sigma_drw, tau_drw, {S_k, C_k} driver Fourier coefficients,
-{S_band, C_band} per band. Inferred if any band uses the physical response:
-log_mdot, inclination (shared across those bands). Inferred per band using
-the free-lag response: tau_{band}. Inferred if a driver light curve is
-given: S_driver, C_driver.
+Inferred, always: sigma_drw, {S_k, C_k} driver Fourier coefficients,
+{S_band, C_band} per band; tau_drw too if ``drw_prior=True``. Inferred if
+any band uses the physical response: log_mdot, inclination (shared across
+those bands). Inferred per band using the free-lag response: tau_{band}.
+Inferred if a driver light curve is given: S_driver, C_driver.
 
 M_BH is a fixed input, never a latent variable.
 
@@ -58,6 +60,34 @@ prior on its power-spectrum normalisation `P0` (`cream_f90.f90`'s `bof4`,
 gated by `sigp0square`/`siglogp0`), which plays the same role as
 `sigma_drw` here.
 
+Random-walk prior note: `drw_prior` (`EchoFit(drw_prior=...)`) chooses
+between a pure random-walk (RW) driver prior, `rw_prior_scale` (default,
+`P(w) = sigma_drw**2 / w**2`, no damping timescale, no `tau_drw` site at
+all), and the original damped random walk (DRW) prior, `drw_prior_scale`
+(`P(w) = sigma_drw**2 * tau_drw / (1 + (w*tau_drw)**2)`, with `tau_drw`
+inferred alongside `sigma_drw`). RW is the default: for the short,
+irregularly-sampled campaigns this package targets, `tau_drw` is often
+weakly identified anyway (see "Known rough edges" in CLAUDE.md), and a
+plain power law is one fewer hyperparameter to identify for the same
+qualitative "smooth stochastic variability" driver.
+
+This is deliberately *not* implemented as "fix `tau_drw` to a large
+constant inside `drw_prior_scale`" (the seemingly obvious way to remove
+the turnover) -- that limit sends the power spectrum to *zero* everywhere
+at fixed `sigma_drw` (`sigma_drw**2 * tau_drw / (w*tau_drw)**2 =
+sigma_drw**2 / (tau_drw * w**2) -> 0` as `tau_drw -> infinity`), not to a
+finite power law. Getting a genuine, non-trivial `1/w**2` law in that
+limit needs `sigma_drw**2 / tau_drw` held fixed as `tau_drw` grows, i.e.
+`sigma_drw`'s own prior would need rescaling to compensate for whatever
+constant `tau_drw` was fixed to -- confirmed directly, not assumed.
+Writing `rw_prior_scale`'s `1/w**2` form directly sidesteps this
+entirely: exact, no large-constant tuning, no `tau_drw` site or rescaling
+needed, and `sigma_drw` keeps the *same* site name and the *same*
+data-anchored prior (`EchoFit._sigma_drw_prior_scale`) in both cases,
+even though its physical meaning differs (a saturating asymptotic
+variability scale for the DRW; a non-saturating power-law amplitude for
+the RW, since a pure random walk's variance grows without bound).
+
 Inclination note: `inclination` is sampled as `cos_inclination ~
 Uniform(cos(INCLINATION_MAX_DEG), 1)`, not `inclination ~
 Uniform(0, INCLINATION_MAX_DEG)` directly, with `inclination` itself a
@@ -71,7 +101,8 @@ visualisation) -- only the sampling parameterisation changed, not the
 site's public meaning.
 
 Fixed-parameter note: `fixed_params` (`EchoFit(fixed_params={...})`) lets
-any of this model's scalar sites (`sigma_drw`, `tau_drw`, `log_mdot`,
+any of this model's scalar sites (`sigma_drw`, `tau_drw` if `drw_prior=True`
+(it isn't a site at all otherwise), `log_mdot`,
 `inclination`, `S_driver`, `C_driver`, `S_{band}`, `C_{band}`, free-lag
 bands' `tau_{band}`, and any band/driver's `sigma_scale_{name}`/
 `sigma_jitter_{name}` if its error model is turned on, see below) be held
@@ -147,6 +178,34 @@ def drw_prior_scale(freqs: jnp.ndarray, sigma_drw, tau_drw) -> jnp.ndarray:
     return jnp.sqrt(power * dw)
 
 
+def rw_prior_scale(freqs: jnp.ndarray, sigma_drw) -> jnp.ndarray:
+    """Standard deviation of each Fourier coefficient under a pure
+    random-walk (RW) prior -- the "no damping timescale" limit of the DRW
+    above, with a genuine power-law power spectrum at every frequency on
+    the grid:
+
+        P(w) = sigma_drw**2 / w**2
+
+    Written directly rather than by taking ``tau_drw -> infinity`` in
+    ``drw_prior_scale``: that limit sends the power spectrum to *zero*
+    everywhere at fixed ``sigma_drw`` (``sigma_drw**2 * tau_drw / (w*tau_drw)**2
+    = sigma_drw**2 / (tau_drw * w**2) -> 0`` as ``tau_drw -> infinity``),
+    not to a finite power law -- getting a non-trivial limit needs
+    ``sigma_drw**2 / tau_drw`` held fixed as ``tau_drw`` grows, which is
+    exactly what writing the ``1/w**2`` form directly does, with no
+    ``tau_drw`` site or rescaling required. ``sigma_drw`` keeps the same
+    site name and the same data-anchored prior (``EchoFit._sigma_drw_prior_scale``)
+    as the DRW case, but its physical meaning changes: it's now this
+    power law's amplitude, not a saturating asymptotic variability scale
+    (a pure random walk's variance grows without bound, it never
+    saturates the way a DRW's does).
+    """
+    dw = jnp.gradient(freqs)
+    dw = jnp.clip(dw, 1e-8, None)
+    power = sigma_drw ** 2 / freqs ** 2
+    return jnp.sqrt(power * dw)
+
+
 def reverberation_model(
     freqs: jnp.ndarray,
     tau_grid: jnp.ndarray,
@@ -155,6 +214,7 @@ def reverberation_model(
     driver: Optional[dict] = None,
     sigma_drw_prior_scale: float = 2.0,
     fixed_params: Optional[Dict[str, float]] = None,
+    drw_prior: bool = False,
 ):
     """NumPyro model for multi-band reverberation-mapped light curves.
 
@@ -198,6 +258,12 @@ def reverberation_model(
         otherwise sample -- see the module docstring's "fixed-parameter"
         note. Unrecognised keys are silently unused (``EchoFit`` validates
         them against the actual registered bands/driver before fitting).
+    drw_prior : bool
+        ``False`` (default): the driver's Fourier coefficients follow a
+        pure random-walk (RW) prior, ``rw_prior_scale`` -- no ``tau_drw``
+        site at all. ``True``: the original damped random walk (DRW)
+        prior, ``drw_prior_scale``, with ``tau_drw`` inferred alongside
+        ``sigma_drw``. See the module docstring's "random-walk prior" note.
     """
     fixed_params = fixed_params or {}
 
@@ -207,15 +273,17 @@ def reverberation_model(
             return numpyro.deterministic(name, jnp.asarray(fixed_params[name], dtype=jnp.float32))
         return numpyro.sample(name, dist_obj)
 
-    # -- shared driving-source (DRW) hyperparameters --------------------
+    # -- shared driving-source hyperparameters ---------------------------
     sigma_drw = _param("sigma_drw", dist.HalfNormal(sigma_drw_prior_scale))
-    tau_drw = _param("tau_drw", dist.LogNormal(loc=jnp.log(20.0), scale=1.0))
-
-    prior_scale = drw_prior_scale(freqs, sigma_drw, tau_drw)
+    if drw_prior:
+        tau_drw = _param("tau_drw", dist.LogNormal(loc=jnp.log(20.0), scale=1.0))
+        prior_scale = drw_prior_scale(freqs, sigma_drw, tau_drw)
+    else:
+        prior_scale = rw_prior_scale(freqs, sigma_drw)
     n_freq = freqs.shape[0]
 
     # Non-centred parameterisation: S, C's scale is itself a sampled
-    # hyperparameter (via prior_scale(sigma_drw, tau_drw)), which produces
+    # hyperparameter (via prior_scale(sigma_drw[, tau_drw])), which produces
     # a Neal's-funnel geometry if sampled directly ("centred") -- NUTS then
     # can't find one step size that works both where prior_scale is small
     # and where it's large, and every trajectory runs to max tree depth.
