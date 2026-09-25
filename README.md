@@ -198,11 +198,18 @@ echofit/
 docs/
     thin_disk_response.md  how thin_disk_response is computed, with
                           scaling-law verification charts
+    mcmc_implementation.md  how the NUTS/HMC inference works, the
+                          dense_mass mass-matrix mechanism with before/after
+                          charts, and how this compares to the original
+                          CREAM Fortran implementation
 notebooks/
     demo.ipynb            end-to-end synthetic-data demo
 scripts/
     smoke_test.py          quick visual sanity check (see below)
+    profile_pipeline.py    one-off performance profile, split into one-off
+                          vs per-iteration costs (see "Performance profiling")
     plot_thin_disk_response_scalings.py  regenerates docs/thin_disk_response.md's charts
+    plot_dense_mass_comparison.py  regenerates docs/mcmc_implementation.md's charts
 tests/
     test_forward_model.py  basic sanity checks on the forward model
     test_recovery.py       end-to-end MCMC recovery test on synthetic data
@@ -580,7 +587,10 @@ sub-millisecond, so the real per-iteration cost is almost entirely NUTS
 itself running long leapfrog trajectories, and `EchoFit.fit(dense_mass=True)`
 cuts that ~7.5x at no loss of recovery accuracy -- see `CLAUDE.md` decision
 #17 for the full investigation and the warmup-length tradeoff that comes
-with it.
+with it, and [`docs/mcmc_implementation.md`](docs/mcmc_implementation.md)
+for how NUTS and the `dense_mass` mass-matrix mechanism actually work
+(with real before/after charts), plus an honest comparison to how the
+original CREAM Fortran implementation explored parameter space.
 
 ## 🔄 Swapping the response function
 

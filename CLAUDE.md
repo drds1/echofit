@@ -680,6 +680,13 @@ and package layout.
     partway through) and on `scripts/fit_lightcurves.py`'s `--dense-mass` flag. Not applied automatically,
     because the extra warmup it needs is a real, user-facing tradeoff (more warmup samples means more one-off
     wall time before sampling starts) that's better left as an explicit choice than a silent default change.
+    `docs/mcmc_implementation.md` covers the whole mechanism (the mass matrix, why NUTS needs gradients at
+    all, JIT compilation) with real before/after charts (`scripts/plot_dense_mass_comparison.py` regenerates
+    them), and an honest comparison to the original CREAM Fortran implementation -- honest in the sense that
+    it only claims what's actually been checked (the physics formulas, the precompute-template trick, the
+    prior-anchoring mechanism, all already covered elsewhere in this file), and is explicit that the
+    Fortran's own sampling algorithm hasn't been inspected in this codebase's own investigation, rather than
+    guessing at a specific comparison.
 
 ## Known rough edges / things to check before trusting results on real data
 
