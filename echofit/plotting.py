@@ -201,6 +201,8 @@ def plot_lightcurve_fits(
     psi_samples: Dict[str, np.ndarray],
     driver_samples: Optional[np.ndarray] = None,
     driver_points: Optional[tuple] = None,
+    driver_sigma_eff: Optional[np.ndarray] = None,
+    sigma_eff_by_band: Optional[Dict[str, np.ndarray]] = None,
     figsize_per_row=(10, 2.2),
     driver_row_height=1.8,
 ):
@@ -233,6 +235,18 @@ def plot_lightcurve_fits(
         units as ``driver_samples`` (i.e. ``(y - C_driver) / S_driver``) so
         it can be overlaid on the driver panel as a direct cross-check that
         the inferred X(t) actually tracks what was observed.
+    driver_sigma_eff : (n_driver_points,) array, optional
+        The driver's own effective error (``sqrt((sigma_scale*yerr)**2 +
+        sigma_jitter**2)``, already back-transformed into the same units as
+        ``driver_points``), drawn as a lighter, wider errorbar overlaid on
+        top of ``driver_points``' own error bars when its light curve was
+        registered with ``fit_error_model=True``.
+    sigma_eff_by_band : dict, optional
+        ``{band_name: array of shape (n_obs,)}`` per-band effective error
+        (same formula as ``driver_sigma_eff``, in the band's own native
+        units), drawn the same way for any band fitted with
+        ``fit_error_model=True``. A band absent from this dict is drawn with
+        only its own quoted ``yerr``.
     """
     ordered, colours = _band_colours(bands)
     n = len(ordered)
@@ -249,16 +263,23 @@ def plot_lightcurve_fits(
     if has_driver:
         ax_drv, ax_drv_unused = axes[0, 0], axes[0, 1]
         lo95, lo68, med, hi68, hi95 = np.percentile(driver_samples, [2.5, 16, 50, 84, 97.5], axis=0)
-        ax_drv.fill_between(t_fine, lo95, hi95, color="0.5", alpha=0.15)
-        ax_drv.fill_between(t_fine, lo68, hi68, color="0.5", alpha=0.35)
-        ax_drv.plot(t_fine, med, color="black", lw=1.5)
+        ax_drv.fill_between(t_fine, lo95, hi95, color="0.5", alpha=0.15, zorder=1)
+        ax_drv.fill_between(t_fine, lo68, hi68, color="0.5", alpha=0.35, zorder=2)
         if driver_points is not None:
             t_d, X_d, yerr_d = driver_points
             ax_drv.errorbar(
                 t_d, X_d, yerr=yerr_d, fmt="o", ms=4, color="C3",
                 ecolor="C3", alpha=0.7, capsize=3, elinewidth=1.2, capthick=1.2,
-                label="driver data (back-transformed)",
+                zorder=3, label="driver data (back-transformed)",
             )
+            if driver_sigma_eff is not None:
+                ax_drv.errorbar(
+                    t_d, X_d, yerr=driver_sigma_eff, fmt="none",
+                    ecolor="C3", alpha=0.35, capsize=3, elinewidth=2.0, capthick=1.2,
+                    zorder=4, label="effective error (fit_error_model)",
+                )
+        ax_drv.plot(t_fine, med, color="black", lw=1.5, zorder=5)
+        if driver_points is not None:
             ax_drv.legend(fontsize=7, loc="upper right")
         ax_drv.set_ylabel("driver\nX(t)")
         ax_drv.set_title("Inferred driving light curve", fontsize=10)
@@ -275,13 +296,20 @@ def plot_lightcurve_fits(
         preds = y_pred_samples[name]
         lo95, lo68, med, hi68, hi95 = np.percentile(preds, [2.5, 16, 50, 84, 97.5], axis=0)
 
-        ax_lc.fill_between(t_fine, lo95, hi95, color=colour, alpha=0.15, label="95% CI")
-        ax_lc.fill_between(t_fine, lo68, hi68, color=colour, alpha=0.35, label="68% CI")
-        ax_lc.plot(t_fine, med, color=colour, lw=1.5, label="posterior median")
+        ax_lc.fill_between(t_fine, lo95, hi95, color=colour, alpha=0.15, label="95% CI", zorder=1)
+        ax_lc.fill_between(t_fine, lo68, hi68, color=colour, alpha=0.35, label="68% CI", zorder=2)
         ax_lc.errorbar(
             d["t"], d["y"], yerr=d["yerr"], fmt="o", ms=4, color="k",
-            ecolor="k", alpha=0.7, capsize=3, elinewidth=1.2, capthick=1.2, label="data",
+            ecolor="k", alpha=0.7, capsize=3, elinewidth=1.2, capthick=1.2, zorder=3,
         )
+        sigma_eff = None if sigma_eff_by_band is None else sigma_eff_by_band.get(name)
+        if sigma_eff is not None:
+            ax_lc.errorbar(
+                d["t"], d["y"], yerr=sigma_eff, fmt="none",
+                ecolor=colour, alpha=0.35, capsize=3, elinewidth=2.0, capthick=1.2,
+                zorder=4, label="effective error (fit_error_model)" if row == 0 else None,
+            )
+        ax_lc.plot(t_fine, med, color=colour, lw=1.5, zorder=5)
         ax_lc.set_ylabel(f"{name}\n({d['wavelength']:.0f} \u00c5)")
         ax_lc.grid(alpha=0.6)
         if row == 0:

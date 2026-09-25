@@ -886,6 +886,7 @@ class EchoFit:
         )(S, C)
 
         driver_points = None
+        driver_sigma_eff = None
         if self.driver_data is not None:
             S_driver = float(np.mean(self.samples["S_driver"][idx]))
             C_driver = float(np.mean(self.samples["C_driver"][idx]))
@@ -894,9 +895,28 @@ class EchoFit:
                 (self.driver_data["y"] - C_driver) / S_driver,
                 self.driver_data["yerr"] / abs(S_driver),
             )
+            if self.driver_data.get("fit_error_model", False):
+                sigma_scale_driver = float(np.mean(self.samples["sigma_scale_driver"][idx]))
+                sigma_jitter_driver = float(np.mean(self.samples["sigma_jitter_driver"][idx]))
+                sigma_eff_driver = np.sqrt(
+                    (sigma_scale_driver * self.driver_data["yerr"]) ** 2 + sigma_jitter_driver ** 2
+                )
+                driver_sigma_eff = sigma_eff_driver / abs(S_driver)
+
+        # Effective error bars (sigma_scale/sigma_jitter, decision #18) are only
+        # meaningful for a band actually fitted with fit_error_model=True.
+        sigma_eff_by_band = {}
+        for name, d in self.bands.items():
+            if not d.get("fit_error_model", False):
+                continue
+            sigma_scale = float(np.mean(self.samples[f"sigma_scale_{name}"][idx]))
+            sigma_jitter = float(np.mean(self.samples[f"sigma_jitter_{name}"][idx]))
+            sigma_eff_by_band[name] = np.sqrt((sigma_scale * d["yerr"]) ** 2 + sigma_jitter ** 2)
 
         return plotting.plot_lightcurve_fits(
             self.bands, np.asarray(t_fine), y_pred_samples,
             np.asarray(self.tau_grid), psi_samples,
-            driver_samples=np.asarray(driver_samples), driver_points=driver_points, **kwargs,
+            driver_samples=np.asarray(driver_samples), driver_points=driver_points,
+            driver_sigma_eff=driver_sigma_eff, sigma_eff_by_band=sigma_eff_by_band or None,
+            **kwargs,
         )
