@@ -913,10 +913,13 @@ class EchoFit:
             sigma_jitter = float(np.mean(self.samples[f"sigma_jitter_{name}"][idx]))
             sigma_eff_by_band[name] = np.sqrt((sigma_scale * d["yerr"]) ** 2 + sigma_jitter ** 2)
 
+        c_band_samples = {name: np.asarray(self.samples[f"C_{name}"]) for name in self.bands}
+
         return plotting.plot_lightcurve_fits(
             self.bands, np.asarray(t_fine), y_pred_samples,
             np.asarray(self.tau_grid), psi_samples,
             driver_samples=np.asarray(driver_samples), driver_points=driver_points,
             driver_sigma_eff=driver_sigma_eff, sigma_eff_by_band=sigma_eff_by_band or None,
+            c_band_samples=c_band_samples,
             **kwargs,
         )

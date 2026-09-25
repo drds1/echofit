@@ -208,7 +208,7 @@ def _report_html(ef, paths, data_uris, fit_seconds, n_div, n_total, truth, title
 different places here are the same thing a Gelman-Rubin R-hat check would
 flag, made visible -- see CLAUDE.md's note on why a single chain isn't
 sufficient evidence of convergence.</p>
-<img src="{data_uris['corner']}">
+<img src="{data_uris['corner']}" alt="{paths['corner'].name}">
 """)
     if "corner_bands" in paths:
         corner_sections.append(f"""
@@ -217,7 +217,7 @@ sufficient evidence of convergence.</p>
 each band's own flux calibration, not physically meaningful on their own
 but worth checking for the same reason as the disk corner plot above:
 chains disagreeing here means the fit hasn't converged.</p>
-<img src="{data_uris['corner_bands']}">
+<img src="{data_uris['corner_bands']}" alt="{paths['corner_bands'].name}">
 """)
     if "corner_free_lag" in paths:
         corner_sections.append(f"""
@@ -226,7 +226,7 @@ chains disagreeing here means the fit hasn't converged.</p>
 lag each such band's top-hat response is centred on (see
 CLAUDE.md decision #7 on why these need a driver light curve to be
 identifiable at all).</p>
-<img src="{data_uris['corner_free_lag']}">
+<img src="{data_uris['corner_free_lag']}" alt="{paths['corner_free_lag'].name}">
 """)
     if "fourier_correlation" in paths:
         corner_sections.append(f"""
@@ -235,7 +235,7 @@ identifiable at all).</p>
 (pooled across chains). Mostly-diagonal (near zero off-diagonal) is what
 the non-centred DRW prior parameterisation assumes; strong off-diagonal
 structure would be worth a closer look.</p>
-<img src="{data_uris['fourier_correlation']}">
+<img src="{data_uris['fourier_correlation']}" alt="{paths['fourier_correlation'].name}">
 """)
     corner_section = "".join(corner_sections)
 
@@ -248,7 +248,7 @@ that Starkey, Horne &amp; Villforth (2016, MNRAS 456, 1960) eq. 12 defines, up
 to an additive constant. Should decrease during warm-up then flatten out
 once the chain has converged; vertical grey lines (if shown) mark checkpoint
 boundaries.</p>
-<img src="{data_uris['bof']}">
+<img src="{data_uris['bof']}" alt="{paths['bof'].name}">
 """
 
     return f"""<!doctype html>
@@ -268,7 +268,7 @@ code {{ background: #f2f2f2; padding: 1px 4px; }}
 {_summary_table_html(ef, truth)}
 
 <h2>Raw light curves</h2>
-<img src="{data_uris['raw']}">
+<img src="{data_uris['raw']}" alt="{paths['raw'].name}">
 
 <h2>Posterior-predictive fit + response function</h2>
 <p>Shaded bands are 68%/95% credible intervals; black points are the data. The
@@ -277,7 +277,7 @@ below it), extended a bit before/after the data -- the credible band should
 widen roughly like t^(1/2) outside the data before saturating, since the
 driver is a DRW. The right-hand panels are the inferred response function
 &psi;(&tau;) per band.</p>
-<img src="{data_uris['fits']}">
+<img src="{data_uris['fits']}" alt="{paths['fits'].name}">
 
 <h2>Driver power spectrum</h2>
 <p>Posterior P(&omega;) = (S<sup>2</sup>+C<sup>2</sup>)/(2&Delta;&omega;) per
@@ -286,11 +286,11 @@ sigma_drw/tau_drw draws (blue dashed) and a plain &omega;<sup>-2</sup>
 random-walk reference (red dotted). These should roughly track each other --
 if the posterior power spectrum diverges from the Lorentzian shape a lot,
 that's worth a closer look.</p>
-<img src="{data_uris['power']}">
+<img src="{data_uris['power']}" alt="{paths['power'].name}">
 
 <h2>MCMC trace diagnostics</h2>
 <p>Traces should look like noisy horizontal bands (well-mixed), not
 slow drifts or a chain stuck at one value.</p>
-<img src="{data_uris['diagnostics']}">
+<img src="{data_uris['diagnostics']}" alt="{paths['diagnostics'].name}">
 {corner_section}{bof_section}</body></html>
 """

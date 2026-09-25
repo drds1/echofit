@@ -203,6 +203,7 @@ def plot_lightcurve_fits(
     driver_points: Optional[tuple] = None,
     driver_sigma_eff: Optional[np.ndarray] = None,
     sigma_eff_by_band: Optional[Dict[str, np.ndarray]] = None,
+    c_band_samples: Optional[Dict[str, np.ndarray]] = None,
     figsize_per_row=(10, 2.2),
     driver_row_height=1.8,
 ):
@@ -247,6 +248,14 @@ def plot_lightcurve_fits(
         units), drawn the same way for any band fitted with
         ``fit_error_model=True``. A band absent from this dict is drawn with
         only its own quoted ``yerr``.
+    c_band_samples : dict, optional
+        ``{band_name: array of shape (n_samples,)}`` posterior draws of that
+        band's constant offset ``C_{band}`` (the additive term in ``y_pred =
+        S_band*echo + C_band``). Drawn as a dashed horizontal line at the
+        posterior median plus 68%/95% credible spans across the whole
+        panel, in the same wavelength-appropriate colour as that band's own
+        fit, so the offset the model is anchoring the echo to is visible
+        alongside it.
     """
     ordered, colours = _band_colours(bands)
     n = len(ordered)
@@ -298,6 +307,15 @@ def plot_lightcurve_fits(
 
         ax_lc.fill_between(t_fine, lo95, hi95, color=colour, alpha=0.15, label="95% CI", zorder=1)
         ax_lc.fill_between(t_fine, lo68, hi68, color=colour, alpha=0.35, label="68% CI", zorder=2)
+        c_samples = None if c_band_samples is None else c_band_samples.get(name)
+        if c_samples is not None:
+            c_lo95, c_lo68, c_med, c_hi68, c_hi95 = np.percentile(c_samples, [2.5, 16, 50, 84, 97.5])
+            ax_lc.axhspan(c_lo95, c_hi95, color=colour, alpha=0.15, zorder=0)
+            ax_lc.axhspan(c_lo68, c_hi68, color=colour, alpha=0.35, zorder=0)
+            ax_lc.axhline(
+                c_med, color=colour, lw=1.0, ls="--", zorder=2.5,
+                label="constant offset (C_band)" if row == 0 else None,
+            )
         ax_lc.errorbar(
             d["t"], d["y"], yerr=d["yerr"], fmt="o", ms=4, color="k",
             ecolor="k", alpha=0.7, capsize=3, elinewidth=1.2, capthick=1.2, zorder=3,
