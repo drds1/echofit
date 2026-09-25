@@ -174,8 +174,11 @@ def main():
         ),
     )
     parser.add_argument(
-        "--outdir", type=Path, default=Path("smoke_test_output"),
-        help="Directory to write PNGs + report.html into.",
+        "--outdir", type=Path, default=None,
+        help="Directory to write PNGs + report.html into. Defaults to "
+             "smoke_test_output/ (synthetic) or ngc5548_smoke_test_output/ "
+             "(ngc5548) -- kept separate so running one doesn't silently "
+             "overwrite the other's committed example output.",
     )
     parser.add_argument(
         "--no-gaps", action="store_true",
@@ -190,6 +193,8 @@ def main():
         help="Passed through to EchoFit.fit() -- see CLAUDE.md decision #17. Off by default here too.",
     )
     args = parser.parse_args()
+    if args.outdir is None:
+        args.outdir = Path("smoke_test_output" if args.dataset == "synthetic" else "ngc5548_smoke_test_output")
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     if args.dataset == "synthetic":

@@ -230,3 +230,8 @@ profiling_output/
 # -- real downloaded data + fit output, not something to commit.
 ngc5548_storm_data/
 ngc5548_quick_look/
+
+# scripts/smoke_test.py --dataset ngc5548's cached raw VizieR download --
+# ngc5548_smoke_test_output/ itself (the PNGs + report.html) IS committed,
+# like smoke_test_output/, but not the raw data cache inside it.
+ngc5548_smoke_test_output/ngc5548_raw/
