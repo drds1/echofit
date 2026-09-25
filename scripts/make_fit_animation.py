@@ -28,8 +28,12 @@ column is wider than the other two -- ``width_ratios``):
   only the disk line rotates, so the tilt is unambiguous rather than
   conflated with the observer's own position moving.
 * per band: its echo light curve (left) and response function psi(tau)
-  (middle, x-axis capped at 30 days -- the response itself is always much
-  narrower than the full lag grid it's evaluated on).
+  (middle, x-axis capped at a shared limit computed by
+  ``plotting.response_function_xlim`` from wherever the widest band's
+  response has actually decayed to negligible area -- the response itself
+  is always much narrower than the full lag grid it's evaluated on, and
+  this is the same mechanism ``plot_lightcurve_fits`` uses, not an
+  independently-chosen/hardcoded value).
 * bottom: Badness-of-Fit (``2 * potential_energy``, matching
   ``plotting.plot_bof``) vs. sample number, drawn as a growing trace that
   extends one point per frame -- should trend down then flatten as the
@@ -78,13 +82,12 @@ from echofit.forward_model import (
     disk_temperature_profile, _schwarzschild_radius_light_days, lag_scaling,
 )
 from echofit.synthetic import generate_synthetic_dataset
-from echofit.plotting import wavelength_to_colour
+from echofit.plotting import wavelength_to_colour, response_function_xlim
 
 # Purely for the illustrative disk panels -- the fit itself may use bands
 # at other wavelengths; this just sets the pictures' colour/size scale.
 _DISK_REFERENCE_WAVELENGTH = 5000.0
 _DISK_N_R, _DISK_N_PHI = 40, 80
-_PSI_XLIM_DAYS = 30.0
 
 
 def _draw_observer(ax, x, y, size):
@@ -167,6 +170,18 @@ def main():
         psi_by_band[name] = np.asarray(psi_all)
     driver_samples = np.asarray(jax.vmap(lambda S_s, C_s: driver_at(S_s, C_s, ef.freqs, t_fine))(S, C))
 
+    # A single, fixed x-axis limit for every psi(tau) panel, shared with
+    # plot_lightcurve_fits (see plotting.response_function_xlim) so the
+    # README animation and the standard report/smoke-test output use the
+    # same mechanism to set this, not independently-chosen/hardcoded
+    # values. Uses the last-fifth of samples (a representative "converged"
+    # state), not the whole chain -- early, still-unconverged samples
+    # shouldn't set a limit meant to stay fixed for the whole animation.
+    tail = max(10, len(next(iter(psi_by_band.values()))) // 5)
+    psi_xlim = response_function_xlim(
+        tau_grid_np, [psi_by_band[name][-tail:].mean(axis=0) for name in ef.bands]
+    )
+
     # Expanding-window 68%/95% credible envelopes -- wide early (few
     # samples), narrowing towards the converged posterior's own width as
     # the chain accumulates more of them. See _expanding_percentiles.
@@ -246,7 +261,7 @@ def main():
 
         psi = psi_by_band[name]
         ax_psi.set_ylim(0.0, 1.05 * psi.max())
-        ax_psi.set_xlim(0.0, _PSI_XLIM_DAYS)
+        ax_psi.set_xlim(0.0, psi_xlim)
         ax_psi.set_ylabel(f"{name}\nψ(τ)")
         ax_psi.grid(alpha=0.6)
         (psi_lines[name],) = ax_psi.plot([], [], color=colour, lw=1.5)

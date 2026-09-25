@@ -30,7 +30,7 @@ from . import model as _model
 from .model import reverberation_model
 from .inference import run_mcmc, run_mcmc_chunked
 from .forward_model import transfer_coeffs, compute_echo, driver_at, tophat_response_free
-from .grid_utils import estimate_dt_min
+from .grid_utils import estimate_dt_min, graded_tau_grid, check_tau_grid_resolution
 from . import plotting
 from . import reporting
 from . import run_manager
@@ -215,6 +215,7 @@ class EchoFit:
         n_tau: int = 400,
         tau_max: Optional[float] = None,
         dt_min: Optional[float] = None,
+        tau_grid_power: float = 3.0,
     ):
         """Build the shared driver-frequency grid and lag grid from the
         currently registered light curves.
@@ -229,6 +230,14 @@ class EchoFit:
             Maximum lag to consider (days). Defaults to half the observed
             time baseline, which is a generous ceiling for reprocessing
             lags relative to typical monitoring campaigns.
+        tau_grid_power : float
+            Grades ``tau_grid`` towards ``tau=0`` (``tau_max * linspace(0,
+            1, n_tau) ** tau_grid_power``) instead of uniform spacing, so
+            short-wavelength/short-lag bands' narrow response functions
+            stay resolved -- see :func:`~echofit.grid_utils.graded_tau_grid`
+            for why this matters (confirmed directly: an under-resolved
+            response silently normalises to a flat, near-zero echo, not an
+            error). ``1.0`` recovers the original uniform grid.
         dt_min : float, optional
             Finest timescale (days) the driver's Fourier series should
             resolve; sets the frequency grid's upper bound
@@ -256,7 +265,9 @@ class EchoFit:
 
         if tau_max is None:
             tau_max = 0.5 * t_span
-        self.tau_grid = jnp.asarray(np.linspace(0.0, tau_max, n_tau))
+        self.tau_grid = jnp.asarray(graded_tau_grid(tau_max, n_tau, power=tau_grid_power))
+        for message in check_tau_grid_resolution(self.tau_grid, self.bands, self.M_BH):
+            warnings.warn(f"build_grid(): {message}")
         return self
 
     # ------------------------------------------------------------------

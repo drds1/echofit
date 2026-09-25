@@ -67,3 +67,95 @@ def estimate_dt_min(
     if t_span is not None:
         dt_min = max(dt_min, floor_frac * t_span)
     return dt_min
+
+
+def graded_tau_grid(tau_max: float, n_tau: int, power: float = 3.0) -> np.ndarray:
+    """A lag grid concentrated near ``tau=0`` rather than uniformly spaced:
+    ``tau_grid = tau_max * linspace(0, 1, n_tau) ** power``.
+
+    A response function's own width scales with its mean lag
+    (``width_frac * tau_mean``, see ``forward_model.response_function``/
+    ``thin_disk_response``), so a uniform grid spends most of its points
+    resolving the large-tau tail, typically wider but also usually not
+    where any real response actually lives. Confirmed directly on a real
+    dataset (NGC 5548 AGN STORM, M_BH ~3.2e7 Msun): a uniform ``tau_grid``
+    gave a band with a ~0.08-day mean lag a response width only ~10% of
+    one grid spacing there, numerically indistinguishable from zero once
+    normalised (``response_function``'s ``trapz``-based area, and
+    ``transfer_coeffs``'s Fourier integral, both under-resolve a peak
+    narrower than the local grid spacing) -- the light curve prediction
+    for that band came out as a flat line, not an echo. The *same* grid
+    only barely resolved a band with a ~1.2-day lag. Grading the grid
+    towards ``tau=0`` fixed every band in that test, including the
+    longest-lag one (from ~1.6 to ~10.6 grid points across its own
+    response width) -- most of the uniform grid's resolution was being
+    spent on a near-``tau_max`` region no band's actual response occupied.
+
+    ``power=3`` (the default) is a deliberately simple, general-purpose
+    choice, not tuned to one specific campaign: higher concentrates
+    resolution more strongly near ``tau=0``, at the cost of coarser
+    resolution near ``tau_max`` -- only relevant for a ``lag_mode="free"``
+    band whose fitted ``tau_{band}`` lands out there, since a physical-mode
+    response's width shrinks together with its own mean lag wherever that
+    lands. ``power=1`` recovers the original uniform grid.
+    """
+    u = np.linspace(0.0, 1.0, n_tau)
+    return tau_max * u ** power
+
+
+def check_tau_grid_resolution(
+    tau_grid: np.ndarray,
+    bands: dict,
+    M_BH: Optional[float],
+    representative_log_mdot: float = -2.0,
+    width_frac: float = 0.35,
+    min_points_across_width: float = 2.0,
+) -> list:
+    """Check whether ``tau_grid`` resolves each ``lag_mode="physical"``
+    band's expected response width -- returns a list of human-readable
+    warning strings (one per band at risk), rather than raising or warning
+    itself, so callers can decide what to do with them (``EchoFit.build_grid``
+    turns them into ``warnings.warn`` calls).
+
+    ``graded_tau_grid``'s default grading fixes this for realistic cases
+    (see its own docstring), but it's a matter of degree, not an absolute
+    guarantee: a short enough wavelength, small enough ``M_BH``, or small
+    enough ``n_tau`` can still under-resolve a response -- confirmed
+    directly once already (NGC 5548's shortest-wavelength UV continuum
+    band, see CLAUDE.md decision #20), silently, as a response and light
+    curve prediction that came out as a flat line rather than an error.
+    This check exists so that happens as an explicit warning instead, as
+    early as ``build_grid()`` rather than only visible after a full fit.
+
+    The real fitted ``log_mdot`` isn't known until after fitting, so this
+    checks at ``representative_log_mdot`` instead -- deliberately a
+    conservative, plausible-worst-case value (well below the prior's own
+    centre, since a smaller accretion rate implies a smaller, harder-to-
+    resolve mean lag), not the prior's central value, so this is more
+    likely to over-warn than to miss a real risk.
+    """
+    from .forward_model import lag_scaling
+
+    tau_grid = np.asarray(tau_grid)
+    messages = []
+    if M_BH is None:
+        return messages
+    for name, d in bands.items():
+        if d.get("lag_mode", "physical") != "physical":
+            continue
+        tau_mean = float(lag_scaling(representative_log_mdot, d["wavelength"], M_BH))
+        width = width_frac * tau_mean
+        idx = max(min(int(np.searchsorted(tau_grid, tau_mean)), len(tau_grid) - 1), 1)
+        local_dtau = float(tau_grid[idx] - tau_grid[idx - 1])
+        if local_dtau <= 0:
+            continue
+        points_across = width / local_dtau
+        if points_across < min_points_across_width:
+            messages.append(
+                f"band {name!r} (wavelength {d['wavelength']:.0f} A): its expected response "
+                f"width (~{width:.4f} days at a conservative log_mdot={representative_log_mdot}) "
+                f"is only ~{points_across:.1f} tau_grid points wide there -- its response/light "
+                f"curve prediction may come out as a flat line. Try a larger n_tau, a higher "
+                f"tau_grid_power, or an explicit smaller tau_max in build_grid()."
+            )
+    return messages

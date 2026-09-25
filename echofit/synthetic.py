@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .forward_model import response_function, tophat_response_free, transfer_coeffs, compute_echo, driver_at
-from .grid_utils import estimate_dt_min
+from .grid_utils import estimate_dt_min, graded_tau_grid
 
 # np.trapz was removed in NumPy 2.x in favour of np.trapezoid; this matches
 # the jnp.trapezoid/jnp.trapz fallback already used throughout forward_model.py.
@@ -138,7 +138,7 @@ def generate_synthetic_dataset(
 
     dt_min = estimate_dt_min(t_by_band.values(), t_span=t_span)
     freqs = make_frequency_grid(n_freq, t_span, dt_min)
-    tau_grid = np.linspace(0.0, tau_max, n_tau)
+    tau_grid = graded_tau_grid(tau_max, n_tau)  # matches EchoFit.build_grid's default grading
 
     # -- draw a DRW driver realisation on the fixed Fourier grid ---------
     dw = np.gradient(freqs)
@@ -255,7 +255,7 @@ def generate_free_lag_dataset(
 
     dt_min = estimate_dt_min(t_by_series.values(), t_span=t_span)
     freqs = make_frequency_grid(n_freq, t_span, dt_min)
-    tau_grid = np.linspace(0.0, tau_max, n_tau)
+    tau_grid = graded_tau_grid(tau_max, n_tau)  # matches EchoFit.build_grid's default grading
 
     dw = np.gradient(freqs)
     power = sigma_drw_true ** 2 * tau_drw_true / (1.0 + (freqs * tau_drw_true) ** 2)

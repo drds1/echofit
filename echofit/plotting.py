@@ -146,6 +146,53 @@ def plot_raw_lightcurves(bands: Dict[str, dict], driver: Optional[dict] = None, 
     return fig, fig.axes
 
 
+def response_function_xlim(tau_grid, psi_list, coverage: float = 0.99, padding: float = 1.2) -> float:
+    """A shared x-axis limit for every psi(tau) panel, based on where the
+    *widest* response has decayed to negligible area -- not the full
+    extent of ``tau_grid``, which ``EchoFit.build_grid`` deliberately sets
+    as a generous ceiling (comfortably exceeding any lag you'd expect),
+    not a claim that every band's response is actually that wide. Used by
+    both ``plot_lightcurve_fits`` (below) and ``scripts/make_fit_animation.py``,
+    so the README animation, the standard report/smoke-test output, and
+    every other plot built on this all use the same mechanism to set this
+    limit, rather than each picking (or hardcoding) their own.
+
+    For each ``psi`` in ``psi_list`` (already area-normalised to 1 on
+    ``tau_grid``, per the response-function contract, CLAUDE.md decision
+    #5), finds the smallest ``tau`` where its cumulative area (CDF)
+    reaches ``coverage`` (default 99%), then returns ``padding`` times the
+    largest such ``tau`` across every band -- so every band's response
+    panel shares one scale, and that scale is set by whichever band's
+    response actually reaches furthest, not by ``tau_grid``'s own
+    (typically much larger) upper bound.
+
+    Parameters
+    ----------
+    tau_grid : (n_tau,) array
+    psi_list : sequence of (n_tau,) array
+        One response per band -- pass a robust representative (e.g. the
+        mean across posterior draws) rather than a pointwise median if
+        individual draws' peaks might land on different grid points; a
+        pointwise median of several narrow, laterally-jittering peaks can
+        itself look artificially flat.
+    """
+    tau_grid = np.asarray(tau_grid)
+    trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+    widest = 0.0
+    for psi in psi_list:
+        psi = np.asarray(psi)
+        area = trapz(psi, tau_grid)
+        if area <= 0:
+            continue
+        segment_area = (psi[1:] + psi[:-1]) / 2.0 * np.diff(tau_grid)
+        cdf = np.concatenate([[0.0], np.cumsum(segment_area)]) / area
+        idx = min(int(np.searchsorted(cdf, coverage)), len(tau_grid) - 1)
+        widest = max(widest, float(tau_grid[idx]))
+    if widest <= 0:
+        return float(tau_grid[-1])  # degenerate fallback: every psi was ~0 everywhere
+    return min(padding * widest, float(tau_grid[-1]))
+
+
 def plot_lightcurve_fits(
     bands: Dict[str, dict],
     t_fine: np.ndarray,
@@ -219,6 +266,8 @@ def plot_lightcurve_fits(
         ax_drv.sharex(axes[1, 0])
         ax_drv_unused.axis("off")
 
+    psi_axes = []
+    psi_means = []
     for row, (name, d) in enumerate(ordered):
         ax_lc, ax_psi = axes[row + has_driver, 0], axes[row + has_driver, 1]
         colour = colours[name]
@@ -245,6 +294,12 @@ def plot_lightcurve_fits(
         ax_psi.plot(tau_grid, pmed, color=colour, lw=1.5)
         ax_psi.set_ylabel(r"$\psi(\tau)$")
         ax_psi.grid(alpha=0.6)
+        psi_axes.append(ax_psi)
+        psi_means.append(np.asarray(psis).mean(axis=0))
+
+    xlim = response_function_xlim(tau_grid, psi_means)
+    for ax_psi in psi_axes:
+        ax_psi.set_xlim(0.0, xlim)
 
     axes[-1, 0].set_xlabel("time [days]")
     axes[-1, 1].set_xlabel(r"$\tau$ [days]")
@@ -261,32 +316,55 @@ def plot_power_spectrum(
     tau_drw_samples: Optional[np.ndarray] = None,
     figsize=(7, 5),
 ):
-    """Posterior driver power spectrum vs. the prior it was drawn under.
+    """Posterior driver power spectrum vs. the prior it was drawn under,
+    displayed in cycles/day (``f = w / (2*pi)``) throughout rather than
+    the angular frequency ``w`` the model itself is built on internally
+    (``EchoFit.freqs``, ``model.drw_prior_scale``/``model.rw_prior_scale``
+    -- the Fourier series' own ``sin(w*t)``/``cos(w*t)`` needs angular
+    frequency, so that internal representation is unchanged; this is a
+    display-only conversion) -- cycles/day is just a more directly
+    interpretable unit (a value of 1 means "one cycle per day").
+
+    Converting a power *spectral density* between frequency variables
+    needs its own Jacobian factor, not just relabelling the axis: a
+    density has to satisfy ``P_f(f) df = P_w(w) dw`` (the actual power in
+    a bin can't change just from renaming the variable it's a density
+    over), so ``P_f(f) = P_w(w) * dw/df = 2*pi * P_w(w)``. In practice
+    this comes out to the same empirical-periodogram formula either way
+    (``(S**2 + C**2) / (2 * delta_k)``), just with the local bin spacing
+    ``delta_k`` computed on the converted (cycles/day) grid instead of the
+    original (rad/day) one -- the ``2*pi`` factors cancel algebraically.
+    The fitted prior curves (Lorentzian/power-law) don't get that
+    cancellation for free, since they're evaluated from a closed-form
+    formula rather than a grid spacing, so those are computed from the
+    original angular ``freqs`` as before and then explicitly multiplied
+    by ``2*pi``.
 
     The empirical periodogram-style estimate per posterior draw is
-    ``P(w_k) = (S_k**2 + C_k**2) / (2 * dw_k)``, where ``dw_k`` is the local
-    frequency-grid spacing -- matching how ``model.drw_prior_scale``/
-    ``model.rw_prior_scale`` set ``Var(S_k) = Var(C_k) = power(w_k) * dw_k``
-    in the first place, so this is directly comparable to the fitted
-    ``power(w)`` curve overlaid from the same posterior draws. Since
-    ``freqs`` is log-spaced (geomspace), skipping the ``dw_k`` normalisation
-    would flatten the apparent log-log slope purely from the growing bin
-    width at high frequency -- not a real physical effect.
+    ``P(f_k) = (S_k**2 + C_k**2) / (2 * df_k)``, where ``df_k`` is the
+    local frequency-grid spacing in cycles/day -- matching how
+    ``model.drw_prior_scale``/``model.rw_prior_scale`` set ``Var(S_k) =
+    Var(C_k) = power(w_k) * dw_k`` in the first place (converted, per
+    above), so this is directly comparable to the fitted ``power(f)``
+    curve overlaid from the same posterior draws. Since ``freqs`` is
+    log-spaced (geomspace), skipping the ``df_k`` normalisation would
+    flatten the apparent log-log slope purely from the growing bin width
+    at high frequency -- not a real physical effect.
 
     ``tau_drw_samples`` given (``drw_prior=True`` fits): the fitted curve is
-    the DRW's Lorentzian, ``power(w) = sigma_drw**2 * tau_drw / (1 +
-    (w*tau_drw)**2)`` -- flat for ``w << 1/tau_drw``, falling off as
-    ``w**-2`` for ``w >> 1/tau_drw``. ``tau_drw_samples`` omitted (the
-    default ``drw_prior=False`` fits): the fitted curve is the pure
-    random-walk power law, ``power(w) = sigma_drw**2 / w**2``, everywhere
-    -- see ``model.py``'s "random-walk prior" note. Either way, a dotted
-    reference line at the ``-2`` slope is overlaid so the high-frequency
-    (DRW) or everywhere (RW) asymptote is easy to eyeball.
+    the DRW's Lorentzian, flat for ``f << 1/(2*pi*tau_drw)``, falling off
+    as ``f**-2`` for ``f >> 1/(2*pi*tau_drw)``. ``tau_drw_samples`` omitted
+    (the default ``drw_prior=False`` fits): the fitted curve is the pure
+    random-walk power law, ``f**-2`` everywhere -- see ``model.py``'s
+    "random-walk prior" note. Either way, a dotted reference line at the
+    ``-2`` slope is overlaid so the high-frequency (DRW) or everywhere
+    (RW) asymptote is easy to eyeball.
 
     Parameters
     ----------
     freqs : (n_freq,) array
-        Driver angular frequency grid (rad/day).
+        Driver angular frequency grid (rad/day) -- ``EchoFit.freqs``,
+        converted to cycles/day internally for display only.
     S_samples, C_samples : (n_samples, n_freq) array
         Posterior draws of the driver's sine/cosine Fourier coefficients.
     sigma_drw_samples : (n_samples,) array
@@ -295,45 +373,47 @@ def plot_power_spectrum(
         Posterior draws of the DRW damping timescale. Omit for a
         ``drw_prior=False`` (random-walk) fit, which has no such site.
     """
-    dw = np.clip(np.gradient(freqs), 1e-8, None)
-    P_samples = (S_samples ** 2 + C_samples ** 2) / (2.0 * dw[None, :])
+    f_cycles = freqs / (2.0 * np.pi)
+    df = np.clip(np.gradient(f_cycles), 1e-8, None)
+    P_samples = (S_samples ** 2 + C_samples ** 2) / (2.0 * df[None, :])
     plo95, plo68, pmed, phi68, phi95 = np.percentile(P_samples, [2.5, 16, 50, 84, 97.5], axis=0)
 
     if tau_drw_samples is not None:
-        fit_power = (
+        fit_power_omega = (
             sigma_drw_samples[:, None] ** 2 * tau_drw_samples[:, None]
             / (1.0 + (freqs[None, :] * tau_drw_samples[:, None]) ** 2)
         )
         fit_label = "fitted DRW prior (Lorentzian)"
     else:
-        fit_power = sigma_drw_samples[:, None] ** 2 / freqs[None, :] ** 2
+        fit_power_omega = sigma_drw_samples[:, None] ** 2 / freqs[None, :] ** 2
         fit_label = "fitted RW prior (power law)"
+    fit_power = fit_power_omega * 2.0 * np.pi  # P_f(f) = 2*pi * P_w(w) -- see docstring
     flo95, flo68, fmed, fhi68, fhi95 = np.percentile(fit_power, [2.5, 16, 50, 84, 97.5], axis=0)
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    ax.fill_between(freqs, plo95, phi95, color="0.6", alpha=0.15, label="posterior P(w) 95% CI")
-    ax.fill_between(freqs, plo68, phi68, color="0.6", alpha=0.3, label="posterior P(w) 68% CI")
+    ax.fill_between(f_cycles, plo95, phi95, color="0.6", alpha=0.15, label="posterior P(f) 95% CI")
+    ax.fill_between(f_cycles, plo68, phi68, color="0.6", alpha=0.3, label="posterior P(f) 68% CI")
     ax.plot(
-        freqs, pmed, color="k", lw=1.0, marker="s", markersize=3,
-        label="posterior P(w) median (per frequency)",
+        f_cycles, pmed, color="k", lw=1.0, marker="s", markersize=3,
+        label="posterior P(f) median (per frequency)",
     )
 
-    ax.fill_between(freqs, flo95, fhi95, color="C0", alpha=0.12)
-    ax.plot(freqs, fmed, color="C0", lw=1.5, ls="--", label=fit_label)
+    ax.fill_between(f_cycles, flo95, fhi95, color="C0", alpha=0.12)
+    ax.plot(f_cycles, fmed, color="C0", lw=1.5, ls="--", label=fit_label)
 
-    w_ref = np.sqrt(freqs[0] * freqs[-1])
-    P_ref = np.interp(w_ref, freqs, pmed)
-    w_line = freqs[freqs >= w_ref]
+    f_ref = np.sqrt(f_cycles[0] * f_cycles[-1])
+    P_ref = np.interp(f_ref, f_cycles, pmed)
+    f_line = f_cycles[f_cycles >= f_ref]
     ax.plot(
-        w_line, P_ref * (w_line / w_ref) ** -2, color="C3", lw=1.2, ls=":",
-        label=r"$\omega^{-2}$ (random-walk asymptote)",
+        f_line, P_ref * (f_line / f_ref) ** -2, color="C3", lw=1.2, ls=":",
+        label=r"$f^{-2}$ (random-walk asymptote)",
     )
 
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel(r"$\omega$ [rad/day]")
-    ax.set_ylabel(r"$P(\omega)$")
+    ax.set_xlabel(r"$f$ [cycles/day]")
+    ax.set_ylabel(r"$P(f)$")
     ax.grid(alpha=0.6, which="both")
     ax.legend(fontsize=8)
     ax.set_title("Driver power spectrum: posterior vs. fitted prior")
@@ -508,7 +588,10 @@ def plot_fourier_correlation(S_samples: np.ndarray, C_samples: np.ndarray, freqs
         equivalent -- either is pooled into ``(n_total_samples, n_freq)``
         before computing the correlation matrix).
     freqs : (n_freq,) array
-        Driver angular frequency grid (rad/day), for axis labelling.
+        Driver angular frequency grid (rad/day) -- ``EchoFit.freqs``,
+        converted to cycles/day for axis labelling only (display, not the
+        internal representation -- see ``plot_power_spectrum``'s
+        docstring for why).
 
     Notes
     -----
@@ -527,15 +610,16 @@ def plot_fourier_correlation(S_samples: np.ndarray, C_samples: np.ndarray, freqs
         corr_S = np.nan_to_num(np.corrcoef(S, rowvar=False), nan=0.0, posinf=0.0, neginf=0.0)
         corr_C = np.nan_to_num(np.corrcoef(C, rowvar=False), nan=0.0, posinf=0.0, neginf=0.0)
 
+    f_cycles = freqs / (2.0 * np.pi)
     fig, axes = plt.subplots(1, 2, figsize=figsize)
-    tick_idx = np.linspace(0, len(freqs) - 1, min(6, len(freqs))).astype(int)
+    tick_idx = np.linspace(0, len(f_cycles) - 1, min(6, len(f_cycles))).astype(int)
     for ax, corr, label in zip(axes, (corr_S, corr_C), ("S (sine)", "C (cosine)")):
         im = ax.imshow(corr, vmin=-1, vmax=1, cmap="RdBu_r")
         ax.set_xticks(tick_idx)
-        ax.set_xticklabels([f"{freqs[k]:.2g}" for k in tick_idx], rotation=90, fontsize=7)
+        ax.set_xticklabels([f"{f_cycles[k]:.2g}" for k in tick_idx], rotation=90, fontsize=7)
         ax.set_yticks(tick_idx)
-        ax.set_yticklabels([f"{freqs[k]:.2g}" for k in tick_idx], fontsize=7)
-        ax.set_xlabel(r"$\omega$ [rad/day]", fontsize=8)
+        ax.set_yticklabels([f"{f_cycles[k]:.2g}" for k in tick_idx], fontsize=7)
+        ax.set_xlabel(r"$f$ [cycles/day]", fontsize=8)
         ax.set_title(f"{label} correlation ({len(freqs)} frequencies)", fontsize=9)
     fig.colorbar(im, ax=axes, shrink=0.8, label="posterior correlation")
     fig.suptitle("Driver Fourier coefficient correlation")
