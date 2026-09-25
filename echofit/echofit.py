@@ -124,7 +124,10 @@ class EchoFit:
         self._fit_config: Optional[dict] = None
 
     # ------------------------------------------------------------------
-    def add_lightcurve(self, name: str, wavelength: float, t, y, yerr, lag_mode: str = "physical"):
+    def add_lightcurve(
+        self, name: str, wavelength: float, t, y, yerr, lag_mode: str = "physical",
+        fit_error_model: bool = False,
+    ):
         """Register a single band's (possibly irregularly sampled) light curve.
 
         Parameters
@@ -141,6 +144,19 @@ class EchoFit:
             ``"free"`` band needs a driver light curve
             (:meth:`add_driver_lightcurve`) to be identifiable; ``.fit()``
             warns if one isn't registered.
+        fit_error_model : bool
+            Off by default (this band's ``yerr`` is used exactly as given,
+            today's behaviour). If ``True``, adds two nuisance parameters
+            for this band, ``sigma_scale_{name}`` (multiplicative) and
+            ``sigma_jitter_{name}`` (additive), so ``yerr`` is treated as
+            only approximately right rather than exact -- see model.py's
+            "error-model" docstring note and CLAUDE.md decision #18. Turn
+            it on per light curve for any band whose quoted errors you
+            don't fully trust; leave it off (e.g. for synthetic data, where
+            ``yerr`` is correct by construction) to keep the likelihood
+            exactly as before. Fix either nuisance parameter to a known
+            value with ``fixed_params={"sigma_scale_{name}": 1.0}`` etc. if
+            you want the model structure on but one of the two pinned.
         """
         if lag_mode not in ("physical", "free"):
             raise ValueError(f"lag_mode must be 'physical' or 'free', got {lag_mode!r}")
@@ -152,11 +168,12 @@ class EchoFit:
             "yerr": yerr[order],
             "wavelength": float(wavelength),
             "lag_mode": lag_mode,
+            "fit_error_model": bool(fit_error_model),
         }
         return self
 
     # ------------------------------------------------------------------
-    def add_driver_lightcurve(self, t, y, yerr):
+    def add_driver_lightcurve(self, t, y, yerr, fit_error_model: bool = False):
         """Register a light curve that directly (zero-lag) observes the
         driver itself -- e.g. an X-ray/lamppost continuum, or a directly
         monitored AGN continuum anchoring an emission-line fit. Modelled as
@@ -168,10 +185,17 @@ class EchoFit:
         ``log_mdot``/thin-disk scaling), but it's the only thing that
         anchors the absolute lag origin for any ``lag_mode="free"`` band --
         see ``add_lightcurve``'s ``lag_mode``.
+
+        fit_error_model : bool
+            Same meaning as ``add_lightcurve``'s: off by default, turns on
+            ``sigma_scale_driver``/``sigma_jitter_driver`` if ``True``.
         """
         t, y, yerr = np.asarray(t, float), np.asarray(y, float), np.asarray(yerr, float)
         order = np.argsort(t)
-        self.driver_data = {"t": t[order], "y": y[order], "yerr": yerr[order]}
+        self.driver_data = {
+            "t": t[order], "y": y[order], "yerr": yerr[order],
+            "fit_error_model": bool(fit_error_model),
+        }
         return self
 
     # ------------------------------------------------------------------
@@ -234,6 +258,7 @@ class EchoFit:
                 "yerr": jnp.asarray(d["yerr"]),
                 "wavelength": d["wavelength"],
                 "lag_mode": d["lag_mode"],
+                "fit_error_model": d.get("fit_error_model", False),
             }
             for name, d in self.bands.items()
         }
@@ -243,6 +268,7 @@ class EchoFit:
                 "t": jnp.asarray(self.driver_data["t"]),
                 "y": jnp.asarray(self.driver_data["y"]),
                 "yerr": jnp.asarray(self.driver_data["yerr"]),
+                "fit_error_model": self.driver_data.get("fit_error_model", False),
             }
         return dict(
             freqs=self.freqs, tau_grid=self.tau_grid, M_BH=self.M_BH,
@@ -281,6 +307,8 @@ class EchoFit:
         valid = {"sigma_drw", "tau_drw"}
         if self.driver_data is not None:
             valid |= {"S_driver", "C_driver"}
+            if self.driver_data.get("fit_error_model", False):
+                valid |= {"sigma_scale_driver", "sigma_jitter_driver"}
         if any(d["lag_mode"] == "physical" for d in self.bands.values()):
             valid |= {"log_mdot", "inclination"}
         for name, d in self.bands.items():
@@ -288,6 +316,9 @@ class EchoFit:
             valid.add(f"C_{name}")
             if d["lag_mode"] == "free":
                 valid.add(f"tau_{name}")
+            if d.get("fit_error_model", False):
+                valid.add(f"sigma_scale_{name}")
+                valid.add(f"sigma_jitter_{name}")
         return valid
 
     def _init_strategy(self, num_chains: int = 1):
@@ -389,12 +420,15 @@ class EchoFit:
         for name, d in bands.items():
             ef.add_lightcurve(
                 name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"],
-                lag_mode=d["lag_mode"],
+                lag_mode=d["lag_mode"], fit_error_model=d.get("fit_error_model", False),
             )
         driver_path = run_dir / "driver.npz"
         if driver_path.exists():
             driver = run_manager.load_driver_npz(driver_path)
-            ef.add_driver_lightcurve(t=driver["t"], y=driver["y"], yerr=driver["yerr"])
+            ef.add_driver_lightcurve(
+                t=driver["t"], y=driver["y"], yerr=driver["yerr"],
+                fit_error_model=driver.get("fit_error_model", False),
+            )
 
         grid = run_manager.load_samples_npz(run_dir / "grid.npz")
         ef.freqs = jnp.asarray(grid["freqs"])

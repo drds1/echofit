@@ -168,6 +168,30 @@ fixed while fitting everything else. A key that couldn't be a real site
 given the bands/driver actually registered raises at `.fit()` time, to
 catch typos rather than silently doing nothing.
 
+**Each light curve can optionally fit its own error rescaling**, via
+`add_lightcurve(..., fit_error_model=True)` (or
+`add_driver_lightcurve(..., fit_error_model=True)`), off by default per
+light curve so nothing changes unless you opt in:
+
+```python
+ef.add_lightcurve("g", wavelength=4770.0, t=t_g, y=y_g, yerr=yerr_g, fit_error_model=True)
+ef.add_lightcurve("i", wavelength=7625.0, t=t_i, y=y_i, yerr=yerr_i)  # trusts yerr_i as given
+```
+
+When on, that band's reported `yerr` is treated as only approximately
+right rather than exact: two extra nuisance parameters, `sigma_scale_g`
+(multiplicative, prior centred on 1 -- "no rescaling") and `sigma_jitter_g`
+(additive, anchored to that band's own typical quoted error), combine as
+`sigma_eff = sqrt((sigma_scale*yerr)**2 + sigma_jitter**2)` in place of
+`yerr` in the likelihood. This is a direct, checked adaptation of the
+author's PhD-era CREAM Fortran code's own `sigexpand`/`varexpand`
+parameters (see `docs/mcmc_implementation.md`'s Fortran comparison and
+`CLAUDE.md` decision #18) -- worth turning on for any band whose quoted
+errors you don't fully trust; leave it off for synthetic data (where
+`yerr` is correct by construction) or any band you're confident in. Fix
+either nuisance parameter with `fixed_params={"sigma_jitter_g": 0.0}` etc.
+if you want the model structure on but one part pinned.
+
 ## 📦 Package layout
 
 ```

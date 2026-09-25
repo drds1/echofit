@@ -698,6 +698,42 @@ and package layout.
     head-to-head `echofit`-vs-`pycecream` wall-clock benchmark has been run; the comparison above is of the
     two mechanisms, verified against the Fortran source, not a benchmark of the two actual codebases.
 
+18. **Per-light-curve error rescaling (`fit_error_model`) is a direct, checked adaptation of the author's
+    PhD-era CREAM Fortran code's `sigexpand`/`varexpand` nuisance parameters, found by reading
+    `cream_f90.f90` while answering "is there anything to learn from the Fortran implementation" (see
+    `docs/mcmc_implementation.md`'s comparison section).** Confirmed directly at `cream_f90.f90:4284`:
+    `ernew2 = (er(it)*fnow)**2 + varnow`, i.e. the reported error is treated as only approximately correct
+    and combined with a multiplicative rescale (`fnow`) and an additive jitter variance (`varnow`), both
+    themselves fitted nuisance parameters. `echofit` previously had no equivalent: `model.py`'s likelihood
+    used `d["yerr"]` verbatim (`dist.Normal(y_pred, d["yerr"])`), which silently assumes every quoted
+    uncertainty is exactly right -- a real risk on actual (not synthetic) data, where an overconfident
+    likelihood from underestimated errors makes everything else (the BOF, the other posteriors) look more
+    constrained than it should.
+
+    `EchoFit.add_lightcurve(..., fit_error_model=True)` / `add_driver_lightcurve(..., fit_error_model=True)`
+    turn this on **per light curve**, off by default (`False`) so existing/synthetic-data fits keep exactly
+    today's likelihood unless explicitly opted in -- a deliberate, explicit request when this was
+    implemented, not an incidental default. When on, that light curve's `sigma_scale_{name}`
+    (`LogNormal(0, 0.5)`, median 1, "no rescaling" is the prior's own centre) and `sigma_jitter_{name}`
+    (`HalfNormal(mean(yerr))`, anchored to that light curve's own typical quoted error, the same
+    data-anchoring philosophy as `sigma_drw`'s prior, decision #13) combine as `sigma_eff =
+    sqrt((sigma_scale*yerr)**2 + sigma_jitter**2)` in place of the raw `yerr`. Both new sites go through the
+    existing `_param`/`fixed_params` mechanism (decision #15) automatically, so e.g.
+    `fixed_params={"sigma_jitter_g": 0.0}` pins just the jitter term while still fitting the rescale factor
+    for that band, without any new plumbing.
+
+    **A real bug found and fixed while wiring this up, not a hypothetical one:** `run_manager.save_bands_npz`/
+    `save_driver_npz` were hardcoded to a fixed set of keys (`t`, `y`, `yerr`, `wavelength`, `lag_mode`) and
+    would have silently dropped `fit_error_model` across a checkpointed run's resume cycle -- the exact same
+    class of bug decision #15 hit once already with `fixed_params` not persisting. Fixed by adding
+    `fit_error_model` to both save/load functions (backward-compatible: an old checkpoint file without the
+    key loads as `False`, not an error). A *second*, separate instance of the same class of bug was caught by
+    the resume-persistence test itself: `EchoFit.resume()` correctly loaded `fit_error_model` via the fixed
+    loader but never passed it through to the `add_lightcurve()`/`add_driver_lightcurve()` calls that
+    reconstruct `self.bands`/`self.driver_data` -- two independent places the same value had to flow through
+    correctly, both needed fixing, both are covered by
+    `tests/test_error_model.py::test_error_model_persists_across_resume`.
+
 ## Known rough edges / things to check before trusting results on real data
 
 - `synthetic.py`'s ground truth is generated with the *same* forward model

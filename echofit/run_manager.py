@@ -110,6 +110,7 @@ def save_bands_npz(path, bands: Dict[str, dict]):
         flat[f"{name}__yerr"] = d["yerr"]
         flat[f"{name}__wavelength"] = np.asarray(d["wavelength"])
         flat[f"{name}__lag_mode"] = np.array(d.get("lag_mode", "physical"))
+        flat[f"{name}__fit_error_model"] = np.array(d.get("fit_error_model", False))
     np.savez(path, names=np.array(names), **flat)
 
 
@@ -121,20 +122,28 @@ def load_bands_npz(path) -> Dict[str, dict]:
             t=z[f"{name}__t"], y=z[f"{name}__y"], yerr=z[f"{name}__yerr"],
             wavelength=float(z[f"{name}__wavelength"]),
             lag_mode=str(z[f"{name}__lag_mode"]) if f"{name}__lag_mode" in z else "physical",
+            fit_error_model=bool(z[f"{name}__fit_error_model"]) if f"{name}__fit_error_model" in z else False,
         )
         for name in names
     }
 
 
 def save_driver_npz(path, driver: dict):
-    """Save a driver light curve ({"t", "y", "yerr"}, no wavelength/lag_mode
-    -- it directly anchors X(t) rather than being an echo of it)."""
-    np.savez(path, t=driver["t"], y=driver["y"], yerr=driver["yerr"])
+    """Save a driver light curve ({"t", "y", "yerr", "fit_error_model"}, no
+    wavelength/lag_mode -- it directly anchors X(t) rather than being an
+    echo of it)."""
+    np.savez(
+        path, t=driver["t"], y=driver["y"], yerr=driver["yerr"],
+        fit_error_model=np.array(driver.get("fit_error_model", False)),
+    )
 
 
 def load_driver_npz(path) -> dict:
     z = np.load(path)
-    return dict(t=z["t"], y=z["y"], yerr=z["yerr"])
+    return dict(
+        t=z["t"], y=z["y"], yerr=z["yerr"],
+        fit_error_model=bool(z["fit_error_model"]) if "fit_error_model" in z else False,
+    )
 
 
 # -- NUTS sampler state (for resuming mid-sampling) ------------------------
