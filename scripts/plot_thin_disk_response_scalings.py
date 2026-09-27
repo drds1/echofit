@@ -25,7 +25,7 @@ matplotlib.use("Agg")
 import numpy as np
 import matplotlib.pyplot as plt
 
-from echofit.forward_model import thin_disk_response, build_thin_disk_response_fast
+from pycream2.forward_model import thin_disk_response, build_thin_disk_response_fast
 
 _np_trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 

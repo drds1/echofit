@@ -1,7 +1,7 @@
 import numpy as np
 import jax.numpy as jnp
 
-from echofit.forward_model import (
+from pycream2.forward_model import (
     lag_scaling,
     response_function,
     transfer_coeffs,

@@ -18,8 +18,8 @@ import warnings
 import numpy as np
 import pytest
 
-from echofit.synthetic import generate_synthetic_dataset, generate_free_lag_dataset
-from echofit.echofit import EchoFit
+from pycream2.synthetic import generate_synthetic_dataset, generate_free_lag_dataset
+from pycream2.echofit import EchoFit
 
 
 def _physical_dataset():

@@ -23,18 +23,18 @@ registry.
 
 Registering a response makes it look-up-able by name; it does not, on its
 own, change what a fit uses. To actually use one for "physical"-mode bands,
-assign it to ``echofit.model.response_function`` (both the NumPyro model and
+assign it to ``pycream2.model.response_function`` (both the NumPyro model and
 the plotting code look this name up dynamically, so the swap is picked up
 everywhere)::
 
-    import echofit.model as model
-    from echofit.responses import get_response
+    import pycream2.model as model
+    from pycream2.responses import get_response
 
     model.response_function = get_response("thin_disk")
 
 To add your own::
 
-    from echofit.responses import register_response
+    from pycream2.responses import register_response
 
     def my_response(tau_grid, log_mdot, wavelength, inclination, M_BH, **kw):
         ...

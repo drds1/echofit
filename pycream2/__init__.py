@@ -1,13 +1,13 @@
 """
-echofit
-=======
+pycream2
+========
 
 Bayesian modelling of AGN reverberation-mapping light curves as a delayed,
 smoothed echo of an unobserved driving (lamppost) light curve.
 
 The public entry point is the :class:`EchoFit` class::
 
-    from echofit import EchoFit
+    from pycream2 import EchoFit
 
     ef = EchoFit(M_BH=1e8)
     ef.add_lightcurve("g", wavelength=4770.0, t=t_g, y=y_g, yerr=yerr_g)

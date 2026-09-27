@@ -1,21 +1,24 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "echofit"
+name = "pycream2"
 version = "0.1.0"
-description = "Bayesian modelling of AGN reverberation-mapping light curves as a delayed echo of a driving light curve"
+description = "Continuum Reprocessing AGN MCMC: Bayesian fitting of AGN accretion-disc reverberation light curves with JAX and NumPyro"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-authors = [{ name = "echofit contributors" }]
-keywords = ["AGN", "reverberation mapping", "Bayesian inference", "NumPyro", "astrophysics"]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "David Starkey" }]
+keywords = ["AGN", "reverberation mapping", "accretion disc", "CREAM", "MCMC", "Bayesian inference", "JAX", "NumPyro", "astrophysics"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Astronomy",
     "Topic :: Scientific/Engineering :: Physics",
 ]
@@ -40,10 +43,13 @@ dependencies = [
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "pre-commit>=3.5", "jupyter", "ipykernel", "Pillow"]
 
 [project.urls]
-Homepage = "https://github.com/drds1/echofit"
+Homepage = "https://github.com/drds1/pycream2"
+Repository = "https://github.com/drds1/pycream2"
+Issues = "https://github.com/drds1/pycream2/issues"
+"Original CREAM (pycecream)" = "https://github.com/drds1/pycecream"
 
 [tool.setuptools.packages.find]
-include = ["echofit*"]
+include = ["pycream2*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -52,7 +58,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["echofit"]
+source = ["pycream2"]
 branch = true
 
 [tool.coverage.report]

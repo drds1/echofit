@@ -4,10 +4,20 @@ Context for Claude (or any future contributor) picking this repo back up.
 
 ## What this is
 
-`echofit`: a JAX + NumPyro package that fits multi-band AGN reverberation
+`pycream2`: a JAX + NumPyro package that fits multi-band AGN reverberation
 light curves as a delayed, smoothed echo of an unobserved driving light
 curve. Built from a single detailed spec; see `README.md` for the physics
 and package layout.
+
+**Formerly `echofit`, renamed to `pycream2` (Continuum Reprocessing AGN
+MCMC) in September 2026** as the successor to the author's CREAM Fortran
+code and its `pycecream` wrapper, and published to PyPI under that name
+(`.github/workflows/publish.yml`, trusted publishing on each GitHub
+release). The `EchoFit` class and its module `pycream2/echofit.py` kept
+their old names deliberately, to keep the user-facing API unchanged; don't
+treat that as a missed rename. Published work should cite Starkey, Horne &
+Villforth (2016): keep `CITATION.cff` and README's "Citing pycream2"
+section in step with each other and with `pyproject.toml`'s version.
 
 ## Key design decisions (don't relitigate without reason)
 
@@ -57,7 +67,7 @@ and package layout.
    array. `transfer_coeffs`/`compute_echo`/plotting never assume the skew-
    normal specifically. To actually swap it at runtime (e.g. for a quick
    experiment, without editing `forward_model.py`), reassign
-   `echofit.model.response_function`, e.g. `import echofit.model as model;
+   `pycream2.model.response_function`, e.g. `import pycream2.model as model;
    model.response_function = my_fn`. This is the *only* place that needs
    patching: `echofit.py`'s plotting code reads it via `model.response_function`
    (attribute access on the module, evaluated at call time) rather than its
@@ -110,10 +120,10 @@ and package layout.
    add another free-form response family, check its gradient w.r.t.
    whatever parameter NUTS samples before trusting a fit that used it.
 
-8. **`thin_disk_response` and `echofit/responses.py` are a second
+8. **`thin_disk_response` and `pycream2/responses.py` are a second
    `lag_mode="physical"` response family, not a new mechanism.** They plug
    into the *existing* swap point from decision #5
-   (`echofit.model.response_function = ...`) -- `echofit/responses.py` is
+   (`pycream2.model.response_function = ...`) -- `pycream2/responses.py` is
    only a small registry (`register_response`/`get_response`) for
    discoverability, it does not change how a response actually gets wired
    into a fit. `thin_disk_response` follows Starkey, Horne & Villforth
@@ -706,7 +716,7 @@ and package layout.
     log-posterior's gradient at every step, which is the standard, well-established reason HMC/NUTS-family
     samplers need far fewer posterior evaluations than Metropolis-Hastings-family ones in a correlated,
     moderate-to-high-dimensional posterior like this one's (tens of driver Fourier coefficients alone). No
-    head-to-head `echofit`-vs-`pycecream` wall-clock benchmark has been run; the comparison above is of the
+    head-to-head `pycream2`-vs-`pycecream` wall-clock benchmark has been run; the comparison above is of the
     two mechanisms, verified against the Fortran source, not a benchmark of the two actual codebases.
 
 18. **Per-light-curve error rescaling (`fit_error_model`) is a direct, checked adaptation of the author's
@@ -715,7 +725,7 @@ and package layout.
     `docs/mcmc_implementation.md`'s comparison section).** Confirmed directly at `cream_f90.f90:4284`:
     `ernew2 = (er(it)*fnow)**2 + varnow`, i.e. the reported error is treated as only approximately correct
     and combined with a multiplicative rescale (`fnow`) and an additive jitter variance (`varnow`), both
-    themselves fitted nuisance parameters. `echofit` previously had no equivalent: `model.py`'s likelihood
+    themselves fitted nuisance parameters. `pycream2` previously had no equivalent: `model.py`'s likelihood
     used `d["yerr"]` verbatim (`dist.Normal(y_pred, d["yerr"])`), which silently assumes every quoted
     uncertainty is exactly right -- a real risk on actual (not synthetic) data, where an overconfident
     likelihood from underestimated errors makes everything else (the BOF, the other posteriors) look more
@@ -797,7 +807,7 @@ and package layout.
     identical result.** Prompted by a direct question about porting the CREAM Fortran code's `itaumax`
     early cut-off (checked in `cream_f90.f90`: it stops the real-space `(n_t, n_tau)` convolution
     lookback at the first lag where `psigrid` returns to zero after being positive). Measured before
-    deciding, not assumed: in `echofit` the lag grid only enters via `transfer_coeffs`, and its cost was
+    deciding, not assumed: in `pycream2` the lag grid only enters via `transfer_coeffs`, and its cost was
     almost entirely re-evaluating `cos`/`sin` of the fixed `(n_freq, n_tau)` phase matrix, per band, on
     every step, not the length of the lookback. `tau_grid`, `freqs` and each light curve's observation
     times never change during a fit, so `EchoFit._model_kwargs()` now precomputes the trapezoid-weighted
@@ -985,7 +995,7 @@ just skips the `poetry.lock` version pinning.
 poetry install --extras dev
 poetry run pytest             # full suite, ~15 min (see decision #16 for
                                # why -- pytest -m "not slow" for ~2 min)
-poetry run pytest --cov=echofit --cov-report=term-missing  # + coverage
+poetry run pytest --cov=pycream2 --cov-report=term-missing  # + coverage
 poetry run pre-commit install  # one-time: run the fast subset on every commit
 poetry run python scripts/smoke_test.py  # quick visual check: fit + save
                                           # plots to smoke_test_output/report.html (~30-50s)

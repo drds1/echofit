@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: >-
+  If you use pycream2 in published work, please cite the paper below
+  (Starkey, Horne & Villforth 2016) and mention pycream2 by name and version.
+title: "pycream2: Continuum Reprocessing AGN MCMC"
+type: software
+authors:
+  - family-names: Starkey
+    given-names: David
+license: MIT
+repository-code: "https://github.com/drds1/pycream2"
+version: 0.1.0
+keywords:
+  - AGN
+  - reverberation mapping
+  - accretion disc
+  - Bayesian inference
+preferred-citation:
+  type: article
+  title: "Accretion disc time lag distributions: applying CREAM to simulated AGN light curves"
+  authors:
+    - family-names: Starkey
+      given-names: D. A.
+    - family-names: Horne
+      given-names: Keith
+    - family-names: Villforth
+      given-names: C.
+  journal: Monthly Notices of the Royal Astronomical Society
+  year: 2016
+  volume: 456
+  issue: 2
+  start: 1960
+  end: 1973
+  doi: 10.1093/mnras/stv2744
+  identifiers:
+    - type: other
+      value: "arXiv:1511.06162"

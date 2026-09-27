@@ -40,15 +40,15 @@ from numpyro.diagnostics import effective_sample_size
 from numpyro.infer import MCMC, NUTS
 from numpyro.infer.util import initialize_model
 
-from echofit.echofit import EchoFit
-from echofit.forward_model import (
+from pycream2.echofit import EchoFit
+from pycream2.forward_model import (
     disk_temperature_profile, driver_at, lag_scaling, transfer_coeffs, transfer_matrices,
     _schwarzschild_radius_light_days,
 )
-from echofit.grid_utils import graded_tau_grid
-from echofit.model import reverberation_model
-from echofit.plotting import blackbody_to_colour
-from echofit.synthetic import generate_synthetic_dataset
+from pycream2.grid_utils import graded_tau_grid
+from pycream2.model import reverberation_model
+from pycream2.plotting import blackbody_to_colour
+from pycream2.synthetic import generate_synthetic_dataset
 
 BANDS = {"u": 3500.0, "g": 4770.0, "r": 6200.0, "i": 7625.0, "z": 9000.0}
 M_BH = 1.0e8

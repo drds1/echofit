@@ -1,7 +1,7 @@
 """
 Tests for forward_model.thin_disk_response (the accretion-disk response
 ported from the PhD-era CREAM Fortran, see CLAUDE.md) and the small
-echofit.responses registry that makes it (and any custom response) a
+pycream2.responses registry that makes it (and any custom response) a
 one-line, discoverable swap-in for "physical"-mode bands.
 """
 
@@ -10,8 +10,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from echofit.forward_model import thin_disk_response, disk_temperature_profile, lag_scaling, _schwarzschild_radius_light_days, _WIEN_B_ANGSTROM_KELVIN
-from echofit.responses import available_responses, get_response, register_response
+from pycream2.forward_model import thin_disk_response, disk_temperature_profile, lag_scaling, _schwarzschild_radius_light_days, _WIEN_B_ANGSTROM_KELVIN
+from pycream2.responses import available_responses, get_response, register_response
 
 _np_trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
@@ -152,7 +152,7 @@ def test_registry_supports_custom_registration():
         assert get_response("my_response") is my_response
         assert "my_response" in available_responses()
     finally:
-        from echofit.responses import _REGISTRY
+        from pycream2.responses import _REGISTRY
 
         del _REGISTRY["my_response"]
 
@@ -160,11 +160,11 @@ def test_registry_supports_custom_registration():
 def test_thin_disk_response_is_usable_via_the_existing_swap_mechanism():
     """thin_disk_response matches the same (tau_grid, log_mdot, wavelength,
     inclination, M_BH) contract as response_function, so it plugs into the
-    existing echofit.model.response_function swap point (CLAUDE.md decision
+    existing pycream2.model.response_function swap point (CLAUDE.md decision
     #5) with no further wiring -- exactly the point of the registry."""
-    import echofit.model as model_mod
-    from echofit.synthetic import generate_synthetic_dataset
-    from echofit.echofit import EchoFit
+    import pycream2.model as model_mod
+    from pycream2.synthetic import generate_synthetic_dataset
+    from pycream2.echofit import EchoFit
 
     original = model_mod.response_function
     try:
