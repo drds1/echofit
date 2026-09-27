@@ -839,26 +839,34 @@ and package layout.
       minimiser (`||resid||^2 + ||theta_hat||^2`), never as the textbook `y^T D^-1 y - b^T P^-1 b`,
       which cancels catastrophically in float32.
     - **The honest result: for NUTS, marginalising does not pay any more.** Decision #20 made each
-      sampled-model gradient ~32x cheaper (8.6ms -> 0.27ms), and a dense mass matrix fixes the sampled model's geometry, so
+      sampled-model gradient ~30x cheaper (8.3ms -> 0.28ms), and a dense mass matrix fixes the sampled model's geometry, so
       on the benchmark (5 bands x 100 obs, 500+500) sampled/dense reached ~39 min-ESS per sampling
-      second against ~16 for marginalised/dense (~7.8 vs ~3.4 overall), with identical `log_mdot`
-      posteriors. Marginalised steps are ~7 per sample, but each costs ~22x more (a `(N+p) x p` QR and its
+      second against ~19 for marginalised/dense (~7.4 vs ~3.6 overall), with identical `log_mdot`
+      posteriors. Marginalised steps are ~7 per sample, but each costs ~21x more (a `(N+p) x p` QR and its
       gradient). `marginalise_linear` therefore stays opt-in and off by default, documented as *not*
       faster for NUTS; it may win where the sampled geometry is genuinely hard (many more Fourier modes,
       poorly adapted mass matrix), which is untested.
     - **The real payoff is `EchoFit.optimise()`**: L-BFGS on the marginal posterior (multi-start,
       `scipy.optimize.minimize` with JAX gradients), then a Laplace Gaussian from the Hessian in
       NumPyro's unconstrained space, then exact linear draws. On the same benchmark the whole first
-      call took ~33s (~5s L-BFGS over 4 restarts; the rest mostly one-off JIT compilation of the
-      Hessian and the draws) against ~53s for 500+500 dense NUTS, and its `log_mdot` posterior
-      (0.194 +/- 0.012) matched NUTS (0.193 +/- 0.011). Two things found while measuring it: L-BFGS's
-      default `ftol` is below float32's own resolution, so its line search reports "abnormal"
-      termination right at the optimum (tolerances are now matched to float32, and convergence is
-      judged by the Newton offset in posterior standard deviations, `optimise_timings["newton_offset_in_sd"]`,
-      warning above 0.25); and actually *taking* that Newton step made the inclination estimate worse
-      (float32 noise plus a non-quadratic direction), so it is a diagnostic only. Inclination is the
-      weak spot generally: its posterior piles up against the 80 degree prior bound, which a Gaussian
-      in logit space can't reproduce. It always uses the marginalised model regardless of `marginalise_linear`: its
+      call took ~27s (~5s L-BFGS over 4 restarts, 2 Newton iterations; the rest mostly one-off JIT
+      compilation of the Hessian and the draws) against ~56s for 500+500 dense NUTS, and its `log_mdot` posterior
+      (0.194 +/- 0.012) matched NUTS (0.193 +/- 0.011). **L-BFGS alone is not enough, found on real
+      data:** on NGC 5548 (4 bands) it stopped 6.5 units of potential above the optimum, with the implied
+      Newton step 3.5 posterior standard deviations long, because it crawls along the prior-dominated
+      driver-amplitude/band-gain ridge (decision #13; all four `S_band` had identical posterior widths,
+      the prior's). `optimise()` therefore polishes with Newton steps using the exact Hessian, each
+      backtracked until the potential falls and only accepted if it does, until the implied step is under
+      0.01 standard deviations (NGC 5548: 2 iterations, potential exactly at the optimum, ~1s beyond the
+      Hessian's compilation). Convergence is reported as `optimise_timings["newton_offset_in_sd"]`, with a
+      warning above 0.25. An earlier version used that offset as a diagnostic only, having concluded
+      that taking the step "made inclination worse"; that conclusion was wrong. It compared the Laplace
+      *mode* with NUTS's posterior *mean*, which legitimately differ for a skewed, bounded parameter; the
+      correct test is whether the potential falls, and with a line search it always does. L-BFGS's
+      tolerances are also matched to float32 (its default `ftol` is below float32's resolution).
+      Inclination is the weak spot generally: its posterior piles up against the 80 degree prior bound,
+      which a Gaussian in logit space can't reproduce, so the Laplace mode sits a few degrees below
+      NUTS's mean. It always uses the marginalised model regardless of `marginalise_linear`: its
       target is the peak of the *marginal* posterior, which is what Laplace needs; a joint peak over the
       Fourier coefficients too would be a different, biased estimator. Laplace is only as good as the
       posterior is Gaussian in unconstrained space: not for `lag_mode="free"` multimodality (rough-edges
@@ -867,7 +875,7 @@ and package layout.
       model it also initialises `S_raw`/`C_raw`/`C_{band}` at their conditional mean, via
       `draw_linear=True` with `linear_eps` pinned to zero.
     - **`dense_mass=True` is now the default** (user decision, taken with these numbers in hand):
-      ~18x more min-ESS per wall-clock second overall than diagonal on the benchmark, same posterior. A
+      ~17x more min-ESS per wall-clock second overall than diagonal on the benchmark, same posterior. A
       checkpointed run resumed from before `dense_mass` was persisted keeps diagonal rather than switching
       mid-run (`tests/test_validation_and_utils.py`). `scripts/make_fit_animation.py` pins
       `dense_mass=False` explicitly, because its deliberately tiny warmup can't adapt a dense matrix and

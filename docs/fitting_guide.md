@@ -98,7 +98,7 @@ flowchart TD
    exact Hessian (the Laplace approximation). The linear parameters are
    then drawn exactly for every sample, so every plot works.
 3. **`EchoFit(marginalise_linear=True)` + `.fit()`: NUTS on the marginalised
-   model.** Exact, samples ~8 parameters, but each step costs ~22× more (a
+   model.** Exact, samples ~8 parameters, but each step costs ~21× more (a
    QR factorisation), so on the benchmark it is about 2× *less* efficient
    than option 1. Keep it for experiments.
 
@@ -127,9 +127,9 @@ logits of bounded ones). Full derivation:
 
 | | `.fit()` (dense NUTS, 500 + 500) | `.optimise()` |
 |---|---|---|
-| Wall time, including compilation | 53 s | 33 s |
+| Wall time, including compilation | 56 s | 27 s |
 | `log_mdot` | 0.193 ± 0.011 | 0.194 ± 0.012 |
-| inclination (°) | 59.0 ± 13.5 | 57.4 ± 14.2 |
+| inclination (°) | 59.0 ± 13.5 | 55.3 ± 14.0 |
 | Exact? | yes, given enough samples | Gaussian approximation in $z$ |
 
 `.optimise()`'s cost is mostly fixed (compilation, the Hessian, the draws),
@@ -144,9 +144,11 @@ for a Gaussian posterior and good near one. It fails when:
   inclination posterior piles up against its 80° bound; the Gaussian
   (in logit space) rolls off instead;
 - **the posterior is multimodal**, as free-lag bands can be (section 7);
-- **the peak isn't converged.** `ef.optimise_timings["newton_offset_in_sd"]`
-  reports how far one more Newton step would move the peak, in posterior
-  standard deviations, and `.optimise()` warns above 0.25.
+- **the peak isn't converged.** `.optimise()` follows L-BFGS with Newton
+  steps (exact Hessian, line-searched, accepted only if the posterior
+  improves) until one more step would move the peak by under 0.01 posterior
+  standard deviations. It reports the final figure as
+  `ef.optimise_timings["newton_offset_in_sd"]` and warns above 0.25.
 
 In those cases, run `.fit()`. `.fit(init_from_optimum=True)` starts NUTS at
 `.optimise()`'s peak (single chain only, since identical starts would
@@ -174,7 +176,7 @@ ridge, and every sample hits the 1023-step ceiling:
 | | Diagonal | Dense (default) |
 |---|---|---|
 | Median steps per sample | 1023 (ceiling) | 63 |
-| Min ESS per total second | 0.43 | 7.8 (18×) |
+| Min ESS per total second | 0.44 | 7.4 (17×) |
 
 The one case for `dense_mass=False` is a very short warmup (a few dozen
 iterations), which is too little to estimate a dense matrix. The README

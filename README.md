@@ -250,7 +250,7 @@ echofit/
                           (precomputed-template fast path for thin_disk_response),
                           tophat_response_free (free-lag mode), transfer_coeffs,
                           compute_echo, driver_at, transfer_matrices/fourier_basis
-                          (fixed trig matrices precomputed once per fit, ~5x
+                          (fixed trig matrices precomputed once per fit, ~30x
                           faster per NUTS step)
     responses.py         a small registry (register_response/get_response) for
                           swapping in a built-in or custom physical response
@@ -463,8 +463,8 @@ priors, so those ~130 parameters integrate out of the likelihood exactly.
 `optimise()` then maximises the remaining ~10-parameter marginal posterior
 with L-BFGS, fits a Gaussian to its curvature at the peak (the Laplace
 approximation) and draws the linear parameters exactly for every sample.
-On a 5-band synthetic benchmark the whole call took ~33 s (~5 s of it
-L-BFGS itself, most of the rest one-off JIT compilation) against ~53 s for a
+On a 5-band synthetic benchmark the whole call took ~27 s (~5 s of it
+L-BFGS itself, most of the rest one-off JIT compilation) against ~56 s for a
 500 + 500 NUTS run, and reproduced NUTS's `log_mdot` posterior
 (0.194 ± 0.012 against 0.193 ± 0.011); the gap widens for longer runs.
 It assumes one well-defined, roughly Gaussian peak: it's weakest for

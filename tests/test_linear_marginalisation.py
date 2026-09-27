@@ -155,7 +155,7 @@ def test_in_memory_marginalised_fit_fills_linear_sites_per_chain():
     assert ef.samples["C_g"].shape == (12,)
 
 
-def test_optimise_fills_samples_and_can_seed_nuts():
+def test_optimise_fills_samples_and_can_seed_nuts(tmp_path):
     """EchoFit.optimise(): the direct (no-MCMC) solve fills everything the
     plots read, and fit(init_from_optimum=True) can start NUTS at its peak,
     for both the sampled and the marginalised model."""
@@ -167,6 +167,11 @@ def test_optimise_fills_samples_and_can_seed_nuts():
     assert np.all(np.linalg.eigvalsh(ef.laplace_covariance) > 0)
     assert ef.extra_fields == {}
     assert ef.plot_lightcurve_fits() is not None
+    assert ef.optimise_timings["newton_offset_in_sd"] < 0.01
+
+    from echofit import reporting
+    html = reporting.generate_report(ef, tmp_path / "report").read_text()
+    assert "direct solve" in html and "divergent transitions" not in html
 
     ef.fit(num_warmup=5, num_samples=5, progress_bar=False, init_from_optimum=True)
     assert "S_raw" in ef.samples

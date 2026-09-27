@@ -197,7 +197,12 @@ def _report_html(ef, paths, data_uris, fit_seconds, n_div, n_total, truth, title
         header_bits.append(f"run: <b>{title}</b>")
     if fit_seconds is not None:
         header_bits.append(f"fit wall time: <b>{fit_seconds:.1f}s</b>")
-    header_bits.append(f"divergent transitions: <b>{n_div}/{n_total}</b>")
+    if n_total == 0 and getattr(ef, "optimum", None) is not None:
+        # EchoFit.optimise(): no sampler ran, so a "0/0 divergences" line would
+        # suggest a clean MCMC run that never happened.
+        header_bits.append("method: <b>direct solve (optimise(): L-BFGS + Laplace approximation, no MCMC)</b>")
+    else:
+        header_bits.append(f"divergent transitions: <b>{n_div}/{n_total}</b>")
     header_line = " &nbsp;|&nbsp; ".join(header_bits)
 
     corner_sections = []

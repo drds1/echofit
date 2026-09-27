@@ -26,11 +26,11 @@ what carry over.
 
 | | Before | After | Change |
 |---|---|---|---|
-| One NUTS gradient evaluation (sampled model) | 8.58 ms | 0.27 ms | **32× faster** |
-| `transfer_coeffs`, `n_tau = 400` | 0.71 ms | 0.030 ms | 24× faster |
-| Default NUTS fit, 500 + 500 (diagonal → dense mass) | 130 s, min ESS 56 | 53 s, min ESS 413 | **18× more ESS per second** |
-| Direct solve, `optimise()` (new) | n/a | 33 s, no MCMC | 1.6× faster than dense NUTS, same `log_mdot` |
-| NUTS on the marginalised model (new, opt-in) | n/a | 143 s, min ESS 485 | *slower* than dense NUTS: kept opt-in |
+| One NUTS gradient evaluation (sampled model) | 8.32 ms | 0.28 ms | **30× faster** |
+| `transfer_coeffs`, `n_tau = 400` | 0.68 ms | 0.026 ms | 26× faster |
+| Default NUTS fit, 500 + 500 (diagonal → dense mass) | 127 s, min ESS 56 | 56 s, min ESS 413 | **17× more ESS per second** |
+| Direct solve, `optimise()` (new) | n/a | 27 s, no MCMC | 2.1× faster than dense NUTS, same `log_mdot` |
+| NUTS on the marginalised model (new, opt-in) | n/a | 134 s, min ESS 485 | *slower* than dense NUTS: kept opt-in |
 | Marginal log-likelihood error in float32 (Cholesky → QR) | 0.022 | 0.00009 | 240× more accurate |
 
 The posterior itself is unchanged throughout: every method gives
@@ -43,7 +43,7 @@ document keeps them:
   sampled step is cheap and the mass matrix is dense (section 3). Its
   payoff is the direct solve (section 4).
 - **The direct solve is not "seconds" end to end.** L-BFGS itself takes
-  about 5 s; most of the 33 s total is one-off JIT compilation of the
+  about 5 s; most of the 27 s total is one-off JIT compilation of the
   Hessian and the posterior draws.
 
 ---
@@ -129,20 +129,20 @@ flat at about 0.03 ms, dominated by call overhead, not arithmetic:
 
 | `n_tau` | 100 | 200 | 400 | 800 | 1600 |
 |---|---|---|---|---|---|
-| Rebuilt every call (ms) | 0.21 | 0.38 | 0.71 | 1.33 | 2.62 |
-| Precomputed (ms) | 0.028 | 0.032 | 0.030 | 0.023 | 0.037 |
-| Speed-up | 8× | 12× | 24× | 58× | 71× |
+| Rebuilt every call (ms) | 0.20 | 0.37 | 0.68 | 1.30 | 2.50 |
+| Precomputed (ms) | 0.031 | 0.028 | 0.026 | 0.029 | 0.030 |
+| Speed-up | 6× | 13× | 26× | 45× | 83× |
 
 In the whole model, with 5 bands and both the transfer matrices and the
 observation-time bases precomputed, one potential-plus-gradient evaluation
-(one NUTS leapfrog step) drops from **8.58 ms to 0.27 ms**, a 32× speed-up
+(one NUTS leapfrog step) drops from **8.32 ms to 0.28 ms**, a 30× speed-up
 with an identical result (`tests/test_precomputed_transfer.py` checks value
 and gradient agree to float32 precision):
 
 ![Cost of one NUTS leapfrog step, three model variants](images/perf/gradient_cost.png)
 
 The third bar, the marginalised model, is section 3's subject: fewer
-dimensions, but each step costs 22× more than the precomputed sampled model.
+dimensions, but each step costs 21× more than the precomputed sampled model.
 
 ---
 
@@ -195,10 +195,10 @@ a dense one the median is 63 steps, and nothing gets near the ceiling.
 |---|---|---|
 | Median leapfrog steps per sample | 1023 (ceiling) | 63 |
 | Adapted step size | 0.0035 | 0.13 |
-| Warmup / sampling time | 61 s / 68 s | 42 s / 11 s |
+| Warmup / sampling time | 61 s / 67 s | 46 s / 10 s |
 | ESS `log_mdot` / `cos_inclination` / `sigma_drw` / `S_g` | 228 / 356 / 69 / 56 | 504 / 413 / 632 / 700 |
-| Min ESS per sampling second | 0.82 | **39.0** (48×) |
-| Min ESS per total second | 0.43 | **7.8** (18×) |
+| Min ESS per sampling second | 0.84 | **39.4** (47×) |
+| Min ESS per total second | 0.44 | **7.4** (17×) |
 | Divergences | 0 | 0 |
 | `log_mdot` | 0.196 ± 0.011 | 0.193 ± 0.011 |
 
@@ -319,9 +319,9 @@ parameters, evaluated three ways in float32 against a float64 reference
 
 | float32 method | Log-likelihood error | Gradient differs from QR's by | Cost (value + gradient) |
 |---|---|---|---|
-| Cholesky, textbook quadratic form | 0.145 | 15.7% | 1.1 ms |
+| Cholesky, textbook quadratic form | 0.145 | 15.7% | 1.2 ms |
 | Cholesky, residual quadratic form | 0.022 | 4.9% | 1.2 ms |
-| **QR, residual form (implemented)** | **0.00009** | reference | 4.2 ms |
+| **QR, residual form (implemented)** | **0.00009** | reference | 4.0 ms |
 
 And the consequence for NUTS, from the development runs (dense mass, 300 +
 300) that exposed the problem:
@@ -334,9 +334,9 @@ And the consequence for NUTS, from the development runs (dense mass, 300 +
 
 ### Results: speed
 
-The QR costs 3.5× a Cholesky, and the marginalised model's step (5.98 ms
-including everything else) costs 22× the precomputed sampled model's
-(0.27 ms). It needs about 9× fewer steps (median 7 against 63), and its
+The QR costs 3.4× a Cholesky, and the marginalised model's step (5.76 ms
+including everything else) costs 21× the precomputed sampled model's
+(0.28 ms). It needs about 9× fewer steps (median 7 against 63), and its
 draws are slightly less autocorrelated, but that is not enough:
 
 ![Time to a posterior, all four methods](images/perf/time_to_posterior.png)
@@ -346,18 +346,18 @@ draws are slightly less autocorrelated, but that is not enough:
 | Sampled dimensions | 133 | 8 |
 | Median leapfrog steps per sample | 63 | 7 |
 | Adapted step size | 0.13 | 0.53 |
-| Warmup / sampling time | 42 s / 11 s | 113 s / 30 s |
+| Warmup / sampling time | 46 s / 10 s | 109 s / 25 s |
 | Warmup leapfrog steps | 271,932 | 17,788 |
 | ESS `log_mdot` / `cos_inclination` / `sigma_drw` / `S_g` | 504 / 413 / 632 / 700 | 1075 / 568 / 485 / 613 |
-| Min ESS per sampling second | **39.0** | 16.0 |
-| Min ESS per total second | **7.8** | 3.4 |
+| Min ESS per sampling second | **39.4** | 19.1 |
+| Min ESS per total second | **7.4** | 3.6 |
 
 So `marginalise_linear` stays **opt-in and off by default**. It is exact,
 and may win where the sampled model's geometry is much harder than here
 (many more Fourier modes, or a mass matrix that can't adapt), but on this
 benchmark plain dense sampling is about 2× more efficient. Section 1's
 precomputation is what moved the goalposts: before it, each sampled step
-cost 8.6 ms, more than a marginalised one.
+cost 8.3 ms, more than a marginalised one.
 
 ---
 
@@ -373,7 +373,11 @@ parameters as logs, bounded ones through logits, including the Jacobians).
 
 1. **Finds the peak** $z^\star = \arg\min_z U(z)$ with L-BFGS
    (`scipy.optimize.minimize`, JAX-computed gradients), from the
-   data-anchored initial point plus a few random restarts, keeping the best.
+   data-anchored initial point plus a few random restarts, keeping the best,
+   then **polishes it with Newton steps** $z \leftarrow z - \alpha H^{-1}\nabla U$
+   using the exact Hessian, backtracking $\alpha$ until $U$ falls and
+   accepting a step only if it does, until the step is under 0.01 posterior
+   standard deviations.
 2. **Fits a Gaussian to the peak** (the Laplace approximation). A
    second-order expansion $U(z) \approx U(z^\star) + \tfrac12 (z-z^\star)^\top H (z-z^\star)$
    with $H = \nabla^2 U(z^\star)$ (exact, via `jax.hessian`) gives
@@ -406,24 +410,26 @@ One `optimise()` call, first in the process (so including compilation), with
 
 | Stage | Time |
 |---|---|
-| L-BFGS, 4 starts (274 evaluations; 77 for the best start) | 4.6 s |
-| Exact Hessian (`jax.hessian`, mostly compilation) | 8.6 s |
-| 1000 Laplace draws plus exact linear draws (a batched QR each) | 14.2 s |
-| Set-up (model initialisation, compilation) | ~5 s |
-| **Total** | **32.7 s** |
+| L-BFGS, 4 starts (274 evaluations; 77 for the best start) | 4.9 s |
+| Exact Hessian and Newton polishing (2 iterations; mostly compilation) | 8.3 s |
+| 1000 Laplace draws plus exact linear draws (a batched QR each) | 13.0 s |
+| Set-up (model initialisation, compilation) | ~1 s |
+| **Total** | **27.1 s** |
 
-That is 1.6× faster than a 500 + 500 dense NUTS run (53 s) on the same data.
+That is 2.1× faster than a 500 + 500 dense NUTS run (56 s) on the same data.
 Most of it is fixed overhead, so the gap widens for longer NUTS runs.
 
-Convergence is judged on the posterior's own scale, not by L-BFGS's flag.
-With a float32 objective of about 3600, the default relative tolerance is
-below float32's resolution, so the line search stops "abnormally" right at
-the optimum. `optimise()` instead computes the Newton step
-$H^{-1}\nabla U$ that the remaining gradient implies, and warns if it
-exceeds 0.25 posterior standard deviations. Here it was 0.17. Applying that
-step as a refinement was tried and made the inclination estimate *worse*
-(float32 gradient noise along a flat, non-quadratic direction), so it is a
-diagnostic only.
+**Why the Newton polishing matters.** L-BFGS on its own can stop well short
+of the peak. On the real NGC 5548 light curves (4 bands) it stopped 6.5
+units of potential above the optimum, with the implied Newton step
+$H^{-1}\nabla U$ 3.5 posterior standard deviations long, because it crawls
+along the flat driver-amplitude/band-gain ridge (all four band gains had
+the same, prior-set posterior width). Two line-searched Newton steps reached
+the optimum exactly. On the benchmark it also took 2 steps (the residual
+offset was 0.17 standard deviations beforehand, 0.00 after). Convergence is
+judged on that posterior scale rather than by L-BFGS's own flag, whose line
+search on a float32 objective often stops "abnormally" right at the optimum.
+`optimise()` warns if the final offset exceeds 0.25.
 
 ![Posterior agreement across all four methods](images/perf/posterior_agreement.png)
 
@@ -432,13 +438,14 @@ diagnostic only.
 | NUTS, diagonal | 0.1956 ± 0.0108 | 60.0 ± 12.7 | 0.084 ± 0.037 | 0.64 ± 0.30 | −0.0007 ± 0.0137 |
 | NUTS, dense | 0.1933 ± 0.0107 | 59.0 ± 13.5 | 0.079 ± 0.035 | 0.68 ± 0.30 | −0.0015 ± 0.0131 |
 | NUTS, marginalised | 0.1943 ± 0.0115 | 60.7 ± 13.5 | 0.084 ± 0.039 | 0.65 ± 0.30 | −0.0020 ± 0.0139 |
-| **`optimise()` (Laplace)** | **0.1943 ± 0.0116** | **57.4 ± 14.2** | **0.080 ± 0.036** | **0.67 ± 0.30** | **−0.0010 ± 0.0132** |
+| **`optimise()` (Laplace)** | **0.1944 ± 0.0116** | **55.3 ± 14.0** | **0.082 ± 0.036** | **0.66 ± 0.30** | **−0.0011 ± 0.0132** |
 
 Every parameter agrees to well within its posterior width. The visible
 difference is inclination's *shape*: the true posterior rises towards and
 piles up against the 80° prior bound, while the Laplace Gaussian (built in
 NumPyro's logit space for the bounded `cos_inclination`) rolls off before
-it. That is the Laplace approximation's textbook limit, and why `.fit()` is
+it. Its mean (55°) is centred on the posterior *mode*, a few degrees below
+NUTS's mean (59°), as expected for a skewed parameter. That is the Laplace approximation's textbook limit, and why `.fit()` is
 still the right tool when a parameter presses against a bound or the
 posterior may be multimodal.
 

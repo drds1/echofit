@@ -161,7 +161,7 @@ currently exposed on `EchoFit.fit()`; see
 On a later, larger benchmark (5 bands × 100 observations; see
 [`performance_improvements.md` §2](performance_improvements.md#2-dense-mass-matrix-by-default))
 the gap was bigger still: every diagonal-mass sample hit the 1023-step
-ceiling, against a median of 63 for dense, for 18× more effective samples
+ceiling, against a median of 63 for dense, for 17× more effective samples
 per second overall.
 
 ## 3. JIT compilation

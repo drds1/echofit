@@ -536,7 +536,7 @@ class EchoFit:
             ``inference.run_mcmc``'s docstring and ``CLAUDE.md`` decisions
             #17/#21. This model's parameters are correlated enough that a
             diagonal mass matrix makes NUTS spend nearly every sample pinned
-            at ``max_tree_depth``'s ceiling: measured ~18x fewer effective
+            at ``max_tree_depth``'s ceiling: measured ~17x fewer effective
             samples per wall-clock second than dense on a 5-band test set,
             with the same posterior. A dense matrix needs a reasonably long
             ``num_warmup`` to adapt (the default 1000 is fine; a few dozen is
@@ -718,8 +718,8 @@ class EchoFit:
         linear parameters exactly for each Laplace sample.
 
         On a 5-band, 500-point synthetic set, the whole first call took
-        ~33s (~5s of it L-BFGS; most of the rest one-off JIT compilation of
-        the Hessian and the posterior draws) against ~53s for a 500+500
+        ~27s (~5s of it L-BFGS; most of the rest one-off JIT compilation of
+        the Hessian and the posterior draws) against ~56s for a 500+500
         dense-mass NUTS run, and its ``log_mdot`` posterior (0.194 +/- 0.012)
         matched NUTS's (0.193 +/- 0.011). The gap widens for longer runs,
         since NUTS's cost grows with the number of samples and this doesn't;
@@ -795,12 +795,50 @@ class EchoFit:
         best = min((r for r in results if np.isfinite(r.fun)), key=lambda r: r.fun)
         timings["lbfgs_seconds"] = time.perf_counter() - t0
         timings["lbfgs_evaluations_total"] = int(sum(r.nfev for r in results))
+        # Newton polishing with the exact Hessian. L-BFGS alone can stop well
+        # short of the peak along the prior-dominated driver-amplitude/band-gain
+        # ridge (CLAUDE.md decision #13): on NGC 5548 it stopped 6.5 units of
+        # potential above it, with the implied Newton step 3.5 posterior standard
+        # deviations long. Each step is backtracked until the potential falls
+        # and only ever accepted if it does, so polishing can't make things
+        # worse; it stops once the implied step is under 0.01 standard
+        # deviations. Convergence is judged on that posterior scale rather than
+        # by L-BFGS's own flag, whose line search on a float32 objective often
+        # ends "abnormally" right at the optimum.
         t0 = time.perf_counter()
-        z_hat = jnp.asarray(best.x, dtype=z0.dtype)
-        hessian = np.asarray(jax.jit(jax.hessian(potential))(z_hat), dtype=np.float64)
-        timings["hessian_seconds"] = time.perf_counter() - t0
-        hessian = 0.5 * (hessian + hessian.T)
-        eigvals, eigvecs = np.linalg.eigh(hessian)
+        hessian_fn = jax.jit(jax.hessian(potential))
+
+        def curvature(z):
+            h = np.asarray(hessian_fn(jnp.asarray(z, dtype=z0.dtype)), dtype=np.float64)
+            vals, vecs = np.linalg.eigh(0.5 * (h + h.T))
+            return vals, (vecs / np.clip(vals, 1e-8, None)) @ vecs.T
+
+        z_best, f_best = np.asarray(best.x, dtype=np.float64), float(best.fun)
+        eigvals, cov = curvature(z_best)
+        n_newton = 0
+        for _ in range(20):
+            step = cov @ objective(z_best)[1]
+            offset_in_sd = float(np.max(np.abs(step) / np.sqrt(np.diag(cov))))
+            if offset_in_sd < 0.01:
+                break
+            alpha = 1.0
+            while alpha > 1e-3 and not objective(z_best - alpha * step)[0] < f_best:
+                alpha *= 0.5
+            f_new = objective(z_best - alpha * step)[0]
+            if not f_new < f_best:
+                break
+            z_best, f_best = z_best - alpha * step, f_new
+            eigvals, cov = curvature(z_best)
+            n_newton += 1
+        best.x, best.fun = z_best, f_best
+        timings["hessian_and_newton_seconds"] = time.perf_counter() - t0
+        timings["newton_iterations"] = n_newton
+        timings["newton_offset_in_sd"] = offset_in_sd
+        if offset_in_sd > 0.25:
+            warnings.warn(
+                f"optimise(): the optimum may not have converged: one more Newton step would "
+                f"move it by {offset_in_sd:.2f} posterior standard deviations."
+            )
         if eigvals.min() <= 0:
             warnings.warn(
                 "optimise(): the Hessian at the optimum is not positive definite "
@@ -808,24 +846,7 @@ class EchoFit:
                 "Gaussian mode; clipping those directions. Treat the Laplace posterior "
                 "with suspicion and cross-check with .fit()."
             )
-        cov = (eigvecs / np.clip(eigvals, 1e-8, None)) @ eigvecs.T
-
-        # Convergence, judged on the posterior's own scale rather than L-BFGS's
-        # flag: a float32 objective leaves a small residual gradient (its line
-        # search often ends "abnormally" right at the optimum), which only
-        # matters if the Newton step it implies is a sizeable fraction of a
-        # posterior standard deviation. Diagnostic only: actually taking that
-        # step was tried and made things worse, because in the broad,
-        # non-Gaussian directions (inclination) float32 gradient noise and
-        # non-quadratic shape make a Newton step unreliable.
-        newton_step = cov @ objective(best.x)[1]
-        offset_in_sd = float(np.max(np.abs(newton_step) / np.sqrt(np.diag(cov))))
-        if offset_in_sd > 0.25:
-            warnings.warn(
-                f"optimise(): the optimum may not have converged: one Newton step would move "
-                f"it by {offset_in_sd:.2f} posterior standard deviations ({best.message})."
-            )
-        timings["newton_offset_in_sd"] = offset_in_sd
+        z_hat = jnp.asarray(best.x, dtype=z0.dtype)
 
         t0 = time.perf_counter()
         z_draws = rng.multivariate_normal(best.x, cov, size=num_samples).astype(np.asarray(z0).dtype)

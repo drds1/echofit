@@ -104,7 +104,7 @@ def _parse_args():
         "--diagonal-mass", action="store_true",
         help=(
             "Use a diagonal NUTS mass matrix instead of the default dense one -- see "
-            "CLAUDE.md decisions #17/#21 (dense measured ~18x more effective samples "
+            "CLAUDE.md decisions #17/#21 (dense measured ~17x more effective samples "
             "per second on this model). A dense matrix needs a reasonable --num-warmup "
             "(the default 1000 is fine); check the report's divergence count."
         ),
