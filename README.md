@@ -36,6 +36,7 @@ Regenerate with `python scripts/make_fit_animation.py`.*
 - [🔭 Background](#-background)
 - [🌀 Model](#-model)
   - [Random-walk vs. damped random-walk driver prior](#random-walk-vs-damped-random-walk-driver-prior)
+- [🧭 Choosing settings: the fitting guide](#-choosing-settings-the-fitting-guide)
 - [📦 Package layout](#-package-layout)
 - [⚙️ Install](#-install)
   - [🐍 1. Check you have Python 3.10 or newer](#-1-check-you-have-python-310-or-newer)
@@ -222,6 +223,22 @@ errors you don't fully trust; leave it off for synthetic data (where
 `yerr` is correct by construction) or any band you're confident in. Fix
 either nuisance parameter with `fixed_params={"sigma_jitter_g": 0.0}` etc.
 if you want the model structure on but one part pinned.
+
+## 🧭 Choosing settings: the fitting guide
+
+The model above comes with a fair number of choices: how to solve it
+(full MCMC with `.fit()`, or the much quicker `.optimise()` direct solve),
+the sampler's settings, how finely to grid frequencies and lags, which
+driver prior, and which bands get physical or free lags. Every one has a
+sensible default, so a plain `ef.build_grid(); ef.fit()` works out of the
+box.
+
+When you do want to change something,
+[`docs/fitting_guide.md`](docs/fitting_guide.md) lists every setting, its
+default, and when to change it, with a decision flow for picking a solver,
+the mathematics behind each choice, and the measured benchmarks behind the
+defaults. It closes with a checklist for telling whether a fit can be
+trusted.
 
 ## 📦 Package layout
 
