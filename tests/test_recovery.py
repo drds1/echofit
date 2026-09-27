@@ -22,8 +22,8 @@ within their prior support rather than close to truth.
 import numpy as np
 import pytest
 
-from echofit.synthetic import generate_synthetic_dataset
-from echofit.echofit import EchoFit
+from pycream2.synthetic import generate_synthetic_dataset
+from pycream2.echofit import EchoFit
 
 
 def _make_synthetic(seed: int):

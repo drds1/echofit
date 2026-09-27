@@ -12,8 +12,8 @@ import warnings
 import numpy as np
 import pytest
 
-from echofit.echofit import EchoFit
-from echofit.synthetic import generate_synthetic_dataset, generate_free_lag_dataset
+from pycream2.echofit import EchoFit
+from pycream2.synthetic import generate_synthetic_dataset, generate_free_lag_dataset
 
 
 def test_physical_band_without_M_BH_raises():

@@ -1,6 +1,6 @@
-# 🔭 echofit
+# 🔭 pycream2
 
-`echofit` is an AGN light curve fitting code that uses MCMC (via
+`pycream2` is an AGN light curve fitting code that uses MCMC (via
 [JAX](https://github.com/google/jax) + [NumPyro](https://num.pyro.ai/)) to
 model multi-band light curves as a lagged echo of a lamppost-driven
 accretion disk[^1], inferring the posterior probability distributions of a
@@ -8,13 +8,26 @@ physically motivated disk model's parameters: accretion rate (`mdot`),
 inclination, and temperature profile. Read on for install instructions,
 tests on synthetic data, and example usage.
 
+**CREAM** stands for **C**ontinuum **R**eprocessing **A**GN **M**CMC.
+`pycream2` is the successor to the original CREAM Fortran code and its
+Python wrapper, [`pycecream`](https://github.com/drds1/pycecream):
+a rewrite in pure JAX/NumPyro, with no Fortran compiler needed, gradient-based
+(NUTS) sampling and a fast direct-solve mode.
+
+```bash
+pip install pycream2
+```
+
+If you use `pycream2` in published work, please cite Starkey, Horne &
+Villforth (2016): see [📝 Citing pycream2](#-citing-pycream2).
+
 [^1]: The disk-reprocessing model of Krolik et al. 1991, ApJ, 371, 541 and
     Cackett, Horne & Winkler 2007, MNRAS, 380, 669; see also Starkey, Horne
     & Villforth 2016, MNRAS, 456, 1960,
     [arXiv:1511.06162](https://arxiv.org/abs/1511.06162), whose
     disk-response model this code implements.
 
-![The driving light curve, each band's fitted echo and response function, a face-on accretion-disk temperature view, and a side-on schematic of the disk tilting with inclination against a fixed observer, all taking shape over the first 150 MCMC samples of a barely-warmed-up chain](docs/images/fit_animation.gif)
+![The driving light curve, each band's fitted echo and response function, a face-on accretion-disk temperature view, and a side-on schematic of the disk tilting with inclination against a fixed observer, all taking shape over the first 150 MCMC samples of a barely-warmed-up chain](https://raw.githubusercontent.com/drds1/pycream2/main/docs/images/fit_animation.gif)
 
 *The driver, per-band echo/response-function fits (each with its own
 68%/95% credible envelope, expanding cumulatively as more samples
@@ -55,6 +68,7 @@ Regenerate with `python scripts/make_fit_animation.py`.*
 - [🔄 Swapping the response function](#-swapping-the-response-function)
 - [🌈 Emission-line / free-lag mode and driver light curves](#-emission-line--free-lag-mode-and-driver-light-curves)
 - [⚠️ Status / caveats](#-status--caveats)
+- [📝 Citing pycream2](#-citing-pycream2)
 
 ## 🔭 Background
 
@@ -98,7 +112,7 @@ want is one joint statistical model of *all* bands at once that propagates
 uncertainty properly through to the physical parameters (black hole mass,
 accretion rate, inclination), not just to a best-fit lag per band pair.
 
-`echofit` is a specific, opinionated take on that joint fit:
+`pycream2` is a specific, opinionated take on that joint fit:
 
 - **Fully Bayesian, one model, every band at once.** A single NumPyro model
   jointly infers the shared driving light curve, the disk response per
@@ -243,7 +257,7 @@ trusted.
 ## 📦 Package layout
 
 ```
-echofit/
+pycream2/
     __init__.py        public API (EchoFit, forward_model helpers, synthetic data)
     forward_model.py    lag_scaling, response_function, thin_disk_response
                           (accretion-disk physical response), build_thin_disk_response_fast
@@ -309,7 +323,15 @@ tests/
 
 ## ⚙️ Install
 
-The steps below assume nothing is already set up beyond a normal Linux (or
+To use `pycream2` as a library, install the released package from PyPI
+into any Python 3.10+ environment:
+
+```bash
+pip install pycream2
+```
+
+To work on the code itself (run the tests, the scripts or the demo
+notebook), install from source instead. The steps below assume nothing is already set up beyond a normal Linux (or
 macOS) shell: no Python environment, no Poetry, nothing. If you already
 have both, skip to step 3.
 
@@ -359,8 +381,8 @@ poetry --version
 ### 📥 3. Get the code and install its dependencies
 
 ```bash
-git clone https://github.com/drds1/echofit.git
-cd echofit
+git clone https://github.com/drds1/pycream2.git
+cd pycream2
 poetry install --extras dev
 ```
 
@@ -403,7 +425,7 @@ want GPU/TPU support instead.
 ## 🚀 Quickstart
 
 ```python
-from echofit import EchoFit, generate_synthetic_dataset
+from pycream2 import EchoFit, generate_synthetic_dataset
 
 data = generate_synthetic_dataset(M_BH=1e8)
 
@@ -589,7 +611,7 @@ warning is raised otherwise); run multiple independent single-chain fits
 if you want chains for R-hat/ESS diagnostics with resume support.
 
 **Output location**, in priority order: the `output_dir=` argument to
-`EchoFit`/`EchoFit.resume()`, then the `ECHOFIT_OUTPUT_DIR` environment
+`EchoFit`/`EchoFit.resume()`, then the `PYCREAM2_OUTPUT_DIR` environment
 variable, then `./outputs` (relative to wherever you run your script from).
 `outputs/` is gitignored by default.
 
@@ -698,8 +720,8 @@ poetry run pytest                                          # full suite, ~15 min
 poetry run pytest -m "not slow"                             # skip the handful of
                                                              # full/multi-chain MCMC
                                                              # recovery tests, ~10 min
-poetry run pytest --cov=echofit --cov-report=term-missing   # + a coverage summary
-poetry run pytest --cov=echofit --cov-report=html           # + an HTML report,
+poetry run pytest --cov=pycream2 --cov-report=term-missing   # + a coverage summary
+poetry run pytest --cov=pycream2 --cov-report=html           # + an HTML report,
                                                              # open htmlcov/index.html
 ```
 
@@ -754,7 +776,7 @@ run scales):
 
 ```bash
 python scripts/profile_pipeline.py                    # a few minutes
-python scripts/profile_pipeline.py --outdir /tmp/echofit_profile
+python scripts/profile_pipeline.py --outdir /tmp/pycream2_profile
 ```
 
 Every per-call timing is measured under `jax.jit`, not eager Python -- see
@@ -802,11 +824,11 @@ on `tau_grid`. Two are built in:
   radial grid, no truncation). A single Gaussian smoothing convolution is
   then applied on top (matching a genuine, physically-motivated part of
   the original Fortran, not just numerical clean-up -- see the docs below
-  for why), exposed via `echofit.responses` for discoverability:
+  for why), exposed via `pycream2.responses` for discoverability:
 
   ```python
-  import echofit.model as model
-  from echofit.responses import get_response
+  import pycream2.model as model
+  from pycream2.responses import get_response
 
   model.response_function = get_response("thin_disk")
   ```
@@ -833,7 +855,7 @@ on `tau_grid`. Two are built in:
   disk integral rather than something either optimisation removes:
 
   ```python
-  from echofit.forward_model import build_thin_disk_response_fast
+  from pycream2.forward_model import build_thin_disk_response_fast
 
   model.response_function = build_thin_disk_response_fast(M_BH=1e8)
   ```
@@ -844,7 +866,7 @@ on `tau_grid`. Two are built in:
   `docs/thin_disk_response.md` section 7 for exactly how much that costs
   in accuracy and when to use the exact `thin_disk_response` instead.
 
-`echofit.responses.register_response(name, fn)` registers your own
+`pycream2.responses.register_response(name, fn)` registers your own
 response under a name for `get_response` to find; `available_responses()`
 lists what's registered. Registering doesn't by itself change what a fit
 uses -- reassigning `model.response_function` (as above) is the one place
@@ -935,3 +957,38 @@ This is a research scaffold, not a validated production pipeline:
   further; `EchoFit.fit()` exposes `max_tree_depth` and `chain_method` if
   you want to bound worst-case sampling cost or add cheap diagnostic chains
   while doing so.
+
+## 📝 Citing pycream2
+
+If you use `pycream2` in work that leads to a publication, please cite the
+paper that introduced the CREAM accretion-disk reprocessing model this
+code implements:
+
+> Starkey, D. A., Horne, K. & Villforth, C. 2016, *Accretion disc time lag
+> distributions: applying CREAM to simulated AGN light curves*, MNRAS,
+> 456, 1960.
+> [doi:10.1093/mnras/stv2744](https://doi.org/10.1093/mnras/stv2744),
+> [arXiv:1511.06162](https://arxiv.org/abs/1511.06162),
+> [ADS](https://ui.adsabs.harvard.edu/abs/2016MNRAS.456.1960S)
+
+```bibtex
+@article{Starkey2016,
+  author  = {Starkey, D. A. and Horne, Keith and Villforth, C.},
+  title   = {Accretion disc time lag distributions: applying {CREAM} to simulated {AGN} light curves},
+  journal = {Monthly Notices of the Royal Astronomical Society},
+  year    = {2016},
+  volume  = {456},
+  number  = {2},
+  pages   = {1960--1973},
+  doi     = {10.1093/mnras/stv2744},
+  eprint  = {1511.06162},
+  archivePrefix = {arXiv}
+}
+```
+
+Please also mention `pycream2` by name (and the version you used, from
+`pycream2.__version__`) in your software or methods section, with a link to
+this repository. The same citation is in [`CITATION.cff`](CITATION.cff),
+which GitHub shows as a "Cite this repository" button in the sidebar.
+
+`pycream2` is released under the [MIT licence](LICENSE).

@@ -11,9 +11,9 @@ import pytest
 from numpyro import handlers
 from scipy.stats import multivariate_normal
 
-from echofit.echofit import EchoFit
-from echofit.model import reverberation_model
-from echofit.synthetic import generate_synthetic_dataset
+from pycream2.echofit import EchoFit
+from pycream2.model import reverberation_model
+from pycream2.synthetic import generate_synthetic_dataset
 
 
 def _small_echofit(with_driver=True, fit_error_model=False, fixed_params=None, **kwargs):
@@ -169,7 +169,7 @@ def test_optimise_fills_samples_and_can_seed_nuts(tmp_path):
     assert ef.plot_lightcurve_fits() is not None
     assert ef.optimise_timings["newton_offset_in_sd"] < 0.01
 
-    from echofit import reporting
+    from pycream2 import reporting
     html = reporting.generate_report(ef, tmp_path / "report").read_text()
     assert "direct solve" in html and "divergent transitions" not in html
 

@@ -1,5 +1,5 @@
 """
-Targeted tests for real coverage gaps found via `pytest --cov=echofit`
+Targeted tests for real coverage gaps found via `pytest --cov=pycream2`
 (see README's "Tests and coverage"): EchoFit's own input-validation/
 guard-clause paths, run_manager.py's filesystem/serialisation helpers,
 synthetic.py's default-argument and observing-gap paths, grid_utils.py's
@@ -16,9 +16,9 @@ import warnings
 import numpy as np
 import pytest
 
-from echofit import grid_utils, run_manager
-from echofit.echofit import EchoFit
-from echofit.synthetic import generate_synthetic_dataset, generate_free_lag_dataset
+from pycream2 import grid_utils, run_manager
+from pycream2.echofit import EchoFit
+from pycream2.synthetic import generate_synthetic_dataset, generate_free_lag_dataset
 
 
 # -- EchoFit validation / guard clauses ------------------------------------
@@ -71,7 +71,7 @@ def test_fit_auto_builds_grid_if_not_called_explicitly():
 def test_max_tree_depth_is_passed_through(monkeypatch):
     """Regression check that inference._build_kernel actually receives and
     applies max_tree_depth, not just accepts it silently."""
-    import echofit.inference as inference_mod
+    import pycream2.inference as inference_mod
 
     seen = {}
     real_nuts = inference_mod.NUTS
@@ -101,7 +101,7 @@ def test_dense_mass_is_passed_through_to_nuts(monkeypatch):
     mean ~858 leapfrog steps/sample); dense_mass=True cut that ~7.5x with
     no loss of recovery accuracy, so it needs to actually reach NUTS, not
     just be accepted and silently dropped."""
-    import echofit.inference as inference_mod
+    import pycream2.inference as inference_mod
 
     seen = {}
     real_nuts = inference_mod.NUTS
@@ -172,7 +172,7 @@ def test_dense_mass_persists_across_resume(tmp_path):
 def test_dense_mass_is_the_default(monkeypatch):
     """CLAUDE.md decision #21 flipped the default to a dense mass matrix
     (~17x more effective samples per second than diagonal on this model)."""
-    import echofit.inference as inference_mod
+    import pycream2.inference as inference_mod
 
     seen = {}
     real_nuts = inference_mod.NUTS

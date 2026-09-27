@@ -22,7 +22,7 @@ bands or points can shift them.
 ## 1. The short version
 
 ```python
-from echofit import EchoFit
+from pycream2 import EchoFit
 
 ef = EchoFit(M_BH=5e7)                        # M_BH is fixed, never fitted
 for name, wav, t, y, yerr in my_bands:
@@ -81,7 +81,7 @@ flowchart TD
 | `max_tree_depth` | `fit` | `None` (NumPyro's 10) | to cap worst-case cost per sample | 4 |
 | `init_from_optimum` | `fit` | `False` | after `.optimise()`, to start NUTS at its peak | 3 |
 | `checkpoint_every`, `report_every` | `fit` (with `title`) | 100, `None` | long runs; watching a report fill in | 4 |
-| response function | `echofit.model.response_function` | skew-normal | the physical thin-disk shape matters (section 9) | 9 |
+| response function | `pycream2.model.response_function` | skew-normal | the physical thin-disk shape matters (section 9) | 9 |
 
 ---
 
@@ -371,8 +371,8 @@ fitting and plotting alike.
 | Thin disk, templated | `model.response_function = build_thin_disk_response_fast(M_BH)` | ~0.55 ms | long thin-disk runs; small errors far from the template's reference point |
 
 ```python
-import echofit.model as model
-from echofit.responses import get_response
+import pycream2.model as model
+from pycream2.responses import get_response
 model.response_function = get_response("thin_disk")
 ```
 

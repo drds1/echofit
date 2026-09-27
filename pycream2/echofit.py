@@ -64,12 +64,12 @@ class EchoFit:
         A name for this fit (e.g. an AGN name like ``"ngc_5548"``). If
         given, ``.fit()`` writes its outputs to
         ``<output_root>/<title>/run_<timestamp>/`` -- see
-        :func:`~echofit.run_manager.resolve_output_root`. If omitted,
+        :func:`~pycream2.run_manager.resolve_output_root`. If omitted,
         nothing is written to disk (the original, fully in-memory
         behaviour).
     output_dir : str, optional
         Override the output root directory. Only relevant when ``title``
-        is given. Otherwise resolved from the ``ECHOFIT_OUTPUT_DIR``
+        is given. Otherwise resolved from the ``PYCREAM2_OUTPUT_DIR``
         environment variable, or ``./outputs`` if that's unset too.
     drw_prior : bool, optional
         ``False`` (default): the driver's Fourier coefficients follow a
@@ -239,7 +239,7 @@ class EchoFit:
             Grades ``tau_grid`` towards ``tau=0`` (``tau_max * linspace(0,
             1, n_tau) ** tau_grid_power``) instead of uniform spacing, so
             short-wavelength/short-lag bands' narrow response functions
-            stay resolved -- see :func:`~echofit.grid_utils.graded_tau_grid`
+            stay resolved -- see :func:`~pycream2.grid_utils.graded_tau_grid`
             for why this matters (confirmed directly: an under-resolved
             response silently normalises to a flat, near-zero echo, not an
             error). ``1.0`` recovers the original uniform grid.
@@ -248,7 +248,7 @@ class EchoFit:
             resolve; sets the frequency grid's upper bound
             ``w_max = pi / dt_min``. Defaults to a robust (5th-percentile)
             estimate from the registered light curves' observation gaps
-            via :func:`~echofit.grid_utils.estimate_dt_min` -- pass this
+            via :func:`~pycream2.grid_utils.estimate_dt_min` -- pass this
             explicitly if you want direct control (e.g. to match a known
             cadence) rather than relying on the data-driven estimate, which
             can be noisy for sparse or highly irregular sampling.

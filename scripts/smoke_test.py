@@ -36,9 +36,9 @@ from pathlib import Path
 
 import numpy as np
 
-from echofit.synthetic import generate_synthetic_dataset
-from echofit.echofit import EchoFit
-from echofit import reporting
+from pycream2.synthetic import generate_synthetic_dataset
+from pycream2.echofit import EchoFit
+from pycream2 import reporting
 
 sys.path.insert(0, str(Path(__file__).parent))
 import download_ngc5548_storm_data as ngc5548_dl  # noqa: E402 (needs sys.path set first)

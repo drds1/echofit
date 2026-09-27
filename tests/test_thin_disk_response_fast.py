@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from echofit.forward_model import (
+from pycream2.forward_model import (
     thin_disk_response,
     build_thin_disk_response_table,
     thin_disk_response_from_table,
@@ -162,11 +162,11 @@ def test_table_and_fast_wrapper_agree():
 def test_fast_response_is_usable_via_the_existing_swap_mechanism():
     """Matches the same (tau_grid, log_mdot, wavelength, inclination, M_BH)
     contract as response_function/thin_disk_response, so it plugs into the
-    existing echofit.model.response_function swap point (CLAUDE.md decision
+    existing pycream2.model.response_function swap point (CLAUDE.md decision
     #5) with no further wiring -- run a (tiny, fast-table) real fit through it."""
-    import echofit.model as model_mod
-    from echofit.synthetic import generate_synthetic_dataset
-    from echofit.echofit import EchoFit
+    import pycream2.model as model_mod
+    from pycream2.synthetic import generate_synthetic_dataset
+    from pycream2.echofit import EchoFit
 
     original = model_mod.response_function
     try:
