@@ -142,12 +142,43 @@ verbatim avoids an overconfident (or underconfident) posterior on
 everything else. Off by default per light curve so synthetic-data fits
 (where `yerr` genuinely is correct by construction) and any existing
 analysis keep exactly today's likelihood unless explicitly opted in.
+
+**Linear-parameter marginalisation note** (``marginalise_linear=True``).
+With every nonlinear parameter held fixed (``sigma_drw``/``tau_drw``,
+``log_mdot``/``inclination``/``tau_{band}``, each ``S_{band}``/``S_driver``,
+the error-model parameters), every predicted light curve is *linear* in the
+driver's Fourier coefficients and in each band's/the driver's constant
+offset ``C_{band}``/``C_driver``, and all of those have Gaussian priors. With
+a Gaussian likelihood they can therefore be integrated out exactly: the
+data are jointly Gaussian, ``y ~ N(0, D + M M^T)``, with ``D`` the diagonal
+of effective error variances and ``M`` the (prior-whitened) design matrix
+mapping the linear parameters onto every observation (every band plus the
+driver, stacked). NUTS then samples only the ~10 nonlinear parameters
+instead of ~2*n_freq more, removing the strongly correlated,
+high-dimensional directions that otherwise push most samples to
+``max_tree_depth``. Nothing is lost: given each posterior sample of the
+nonlinear parameters, the linear parameters' conditional posterior is an
+exact Gaussian, drawn from after the fit (``draw_linear=True``, see
+``EchoFit._add_linear_draws``), so ``S``/``C``/``C_{band}`` etc. come back
+under their usual names. It is the same joint posterior as the default
+model, factorised differently.
+
+Evaluated via the Woodbury/matrix-determinant identities in the
+prior-whitened basis (``P = I + M^T D^-1 M``, ``(p, p)``, ``p = 2*n_freq +
+n_offsets``): ``log|D + M M^T| = log|D| + log|P|``, and the quadratic form
+as ``min_theta [(y - M theta)^T D^-1 (y - M theta) + theta^T theta]``,
+evaluated at its minimiser ``theta_hat = P^-1 M^T D^-1 y``. That form is
+used on purpose rather than the textbook ``y^T D^-1 y - b^T P^-1 b``: the
+latter subtracts two large, nearly equal numbers and loses the answer to
+float32 cancellation, whereas an error in ``theta_hat`` only perturbs a
+minimum at second order.
 """
 
 from __future__ import annotations
 
 from typing import Dict, Optional
 
+import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
@@ -216,6 +247,8 @@ def reverberation_model(
     fixed_params: Optional[Dict[str, float]] = None,
     drw_prior: bool = False,
     transfer_mats: Optional[tuple] = None,
+    marginalise_linear: bool = False,
+    draw_linear: bool = False,
 ):
     """NumPyro model for multi-band reverberation-mapped light curves.
 
@@ -273,6 +306,20 @@ def reverberation_model(
         every gradient evaluation (~5x faster per NUTS step, identical
         result). ``EchoFit`` always supplies both; omitted, everything is
         computed on the fly as before.
+    marginalise_linear : bool
+        Integrate the driver's Fourier coefficients and every
+        ``C_{band}``/``C_driver`` offset out analytically instead of
+        sampling them -- see the module docstring's "linear-parameter
+        marginalisation" note. Only the nonlinear parameters remain NUTS
+        sample sites; the likelihood becomes a single ``numpyro.factor``.
+    draw_linear : bool
+        Only with ``marginalise_linear``, and only for post-processing (via
+        ``numpyro.infer.Predictive`` with the nonlinear posterior samples
+        substituted in, never under NUTS): also draw the linear parameters
+        from their exact conditional Gaussian posterior and expose them as
+        ``S_raw``/``C_raw``/``S``/``C``/``C_{band}``/``C_driver``/
+        ``y_pred_*`` deterministic sites, under the same names the default
+        (sampled) model uses.
     """
     fixed_params = fixed_params or {}
 
@@ -298,25 +345,40 @@ def reverberation_model(
     # and where it's large, and every trajectory runs to max tree depth.
     # Sampling unit-scale S_raw/C_raw and pushing the hyperparameter
     # dependence into a deterministic transform removes that coupling.
-    with numpyro.plate("freq", n_freq):
-        S_raw = numpyro.sample("S_raw", dist.Normal(0.0, 1.0))
-        C_raw = numpyro.sample("C_raw", dist.Normal(0.0, 1.0))
-    S = numpyro.deterministic("S", S_raw * prior_scale)
-    C = numpyro.deterministic("C", C_raw * prior_scale)
+    if not marginalise_linear:
+        with numpyro.plate("freq", n_freq):
+            S_raw = numpyro.sample("S_raw", dist.Normal(0.0, 1.0))
+            C_raw = numpyro.sample("C_raw", dist.Normal(0.0, 1.0))
+        S = numpyro.deterministic("S", S_raw * prior_scale)
+        C = numpyro.deterministic("C", C_raw * prior_scale)
+
+    # Marginalised mode only: every light curve's contribution to the joint
+    # linear-Gaussian system, stacked and solved once after the band loop.
+    blocks = []
 
     # -- driver light curve: a direct, zero-lag anchor on X(t) itself ----
     if driver is not None:
         S_driver = _param("S_driver", dist.LogNormal(0.0, 1.0))
-        C_driver = _param("C_driver", dist.Normal(0.0, 5.0))
-        y_pred_driver = S_driver * driver_at(S, C, freqs, driver["t"], basis=driver.get("basis")) + C_driver
-        numpyro.deterministic("y_pred_driver", y_pred_driver)
+        offset_is_linear = marginalise_linear and "C_driver" not in fixed_params
+        if not offset_is_linear:
+            C_driver = _param("C_driver", dist.Normal(0.0, 5.0))
+        if not marginalise_linear:
+            y_pred_driver = S_driver * driver_at(S, C, freqs, driver["t"], basis=driver.get("basis")) + C_driver
+            numpyro.deterministic("y_pred_driver", y_pred_driver)
         if driver.get("fit_error_model", False):
             sigma_scale_driver = _param("sigma_scale_driver", dist.LogNormal(0.0, 0.5))
             sigma_jitter_driver = _param("sigma_jitter_driver", dist.HalfNormal(jnp.mean(driver["yerr"])))
             sigma_eff_driver = jnp.sqrt((sigma_scale_driver * driver["yerr"]) ** 2 + sigma_jitter_driver ** 2)
         else:
             sigma_eff_driver = driver["yerr"]
-        numpyro.sample("obs_driver", dist.Normal(y_pred_driver, sigma_eff_driver), obs=driver["y"])
+        if marginalise_linear:
+            sin_wt, cos_wt = driver.get("basis") or _basis(freqs, driver["t"])
+            blocks.append(dict(
+                name="driver", y=driver["y"], sigma=sigma_eff_driver, gain=S_driver,
+                S_cols=sin_wt, C_cols=cos_wt, known_offset=None if offset_is_linear else C_driver,
+            ))
+        else:
+            numpyro.sample("obs_driver", dist.Normal(y_pred_driver, sigma_eff_driver), obs=driver["y"])
 
     # -- shared physical reprocessing parameters (physical-mode bands only) --
     if any(d["lag_mode"] == "physical" for d in bands.values()):
@@ -341,7 +403,9 @@ def reverberation_model(
     # -- per-band amplitude / offset + likelihood ------------------------
     for band_name, d in bands.items():
         S_band = _param(f"S_{band_name}", dist.LogNormal(0.0, 1.0))
-        C_band = _param(f"C_{band_name}", dist.Normal(0.0, 5.0))
+        offset_is_linear = marginalise_linear and f"C_{band_name}" not in fixed_params
+        if not offset_is_linear:
+            C_band = _param(f"C_{band_name}", dist.Normal(0.0, 5.0))
 
         if d["lag_mode"] == "physical":
             psi = response_function(
@@ -356,18 +420,107 @@ def reverberation_model(
             psi = tophat_response_free(tau_grid, tau_mean=tau_band)
 
         A, B = transfer_coeffs(tau_grid, psi, freqs, matrices=transfer_mats)
-        echo = compute_echo(S, C, freqs, A, B, d["t"], basis=d.get("basis"))
-        y_pred = S_band * echo + C_band
+        if not marginalise_linear:
+            echo = compute_echo(S, C, freqs, A, B, d["t"], basis=d.get("basis"))
+            y_pred = S_band * echo + C_band
+            numpyro.deterministic(f"y_pred_{band_name}", y_pred)
 
-        numpyro.deterministic(f"y_pred_{band_name}", y_pred)
         if d.get("fit_error_model", False):
             sigma_scale = _param(f"sigma_scale_{band_name}", dist.LogNormal(0.0, 0.5))
             sigma_jitter = _param(f"sigma_jitter_{band_name}", dist.HalfNormal(jnp.mean(d["yerr"])))
             sigma_eff = jnp.sqrt((sigma_scale * d["yerr"]) ** 2 + sigma_jitter ** 2)
         else:
             sigma_eff = d["yerr"]
-        numpyro.sample(
-            f"obs_{band_name}",
-            dist.Normal(y_pred, sigma_eff),
-            obs=d["y"],
-        )
+
+        if marginalise_linear:
+            # echo = sin_wt @ (S*A + C*B) + cos_wt @ (C*A - S*B), so these are
+            # the columns multiplying S and C (see forward_model.compute_echo).
+            sin_wt, cos_wt = d.get("basis") or _basis(freqs, d["t"])
+            blocks.append(dict(
+                name=band_name, y=d["y"], sigma=sigma_eff, gain=S_band,
+                S_cols=sin_wt * A - cos_wt * B, C_cols=sin_wt * B + cos_wt * A,
+                known_offset=None if offset_is_linear else C_band,
+            ))
+        else:
+            numpyro.sample(
+                f"obs_{band_name}",
+                dist.Normal(y_pred, sigma_eff),
+                obs=d["y"],
+            )
+
+    if marginalise_linear:
+        _linear_marginal(blocks, prior_scale, draw_linear)
+
+
+_OFFSET_PRIOR_SD = 5.0  # C_{band}/C_driver ~ Normal(0, 5), as in the sampled path
+
+
+def _basis(freqs, t):
+    wt = freqs[None, :] * t[:, None]
+    return jnp.sin(wt), jnp.cos(wt)
+
+
+def _linear_marginal(blocks, prior_scale, draw_linear):
+    """Add the exact marginal likelihood of every light curve in ``blocks``
+    (linear parameters integrated out) as a ``numpyro.factor`` and, if
+    ``draw_linear``, draw the linear parameters from their conditional
+    posterior -- see the module docstring's "linear-parameter
+    marginalisation" note for the maths.
+
+    Linear parameters, in the prior-whitened basis (unit-Normal prior):
+    ``S_raw`` (n_freq), ``C_raw`` (n_freq), then one offset per block whose
+    ``known_offset`` is ``None`` (scaled by ``_OFFSET_PRIOR_SD``).
+    """
+    n_freq = prior_scale.shape[0]
+    offset_names = [b["name"] for b in blocks if b["known_offset"] is None]
+    n_off = len(offset_names)
+
+    rows, ys, sigmas = [], [], []
+    for b in blocks:
+        n = b["y"].shape[0]
+        onehot = jnp.zeros((n_off,))
+        if b["known_offset"] is None:
+            onehot = onehot.at[offset_names.index(b["name"])].set(_OFFSET_PRIOR_SD)
+            ys.append(b["y"])
+        else:
+            ys.append(b["y"] - b["known_offset"])
+        rows.append(jnp.concatenate([
+            b["gain"] * b["S_cols"] * prior_scale,
+            b["gain"] * b["C_cols"] * prior_scale,
+            jnp.ones((n, 1)) * onehot[None, :],
+        ], axis=1))
+        sigmas.append(jnp.broadcast_to(b["sigma"], (n,)))
+    y = jnp.concatenate(ys)
+    sigma = jnp.concatenate(sigmas)
+    Mw = jnp.concatenate(rows, axis=0) / sigma[:, None]   # D^-1/2 M, (N, p)
+    yw = y / sigma                                        # D^-1/2 y
+    p = Mw.shape[1]
+
+    # QR of the stacked least-squares system [D^-1/2 M; I], not a Cholesky
+    # of P = I + M^T D^-1 M: R^T R = P, but R's condition number is only the
+    # square root of P's. P reached ~3e7 on a 5-band, 500-point test set, and
+    # a float32 Cholesky there gave gradients ~9% off, enough to shrink
+    # NUTS's adapted step size from ~0.4 to a tiny fraction of that and
+    # multiply trajectory lengths ~30x. See CLAUDE.md decision #21.
+    Q, R = jnp.linalg.qr(jnp.concatenate([Mw, jnp.eye(p)], axis=0))
+    theta_hat = jax.scipy.linalg.solve_triangular(R, Q[: Mw.shape[0]].T @ yw, lower=False)
+    resid = yw - Mw @ theta_hat
+    quad = resid @ resid + theta_hat @ theta_hat
+    log_det = 2.0 * jnp.sum(jnp.log(jnp.abs(jnp.diag(R)))) + 2.0 * jnp.sum(jnp.log(sigma))
+    numpyro.factor("linear_marginal_loglik", -0.5 * (quad + log_det + y.shape[0] * jnp.log(2.0 * jnp.pi)))
+
+    if not draw_linear:
+        return
+    # Conditional posterior is N(theta_hat, P^-1); with P = R^T R,
+    # theta_hat + R^-1 eps (eps ~ N(0, I)) has exactly that covariance.
+    eps = numpyro.sample("linear_eps", dist.Normal(0.0, 1.0).expand([p]).to_event(1))
+    theta = theta_hat + jax.scipy.linalg.solve_triangular(R, eps, lower=False)
+    S_raw = numpyro.deterministic("S_raw", theta[:n_freq])
+    C_raw = numpyro.deterministic("C_raw", theta[n_freq:2 * n_freq])
+    numpyro.deterministic("S", S_raw * prior_scale)
+    numpyro.deterministic("C", C_raw * prior_scale)
+    for i, name in enumerate(offset_names):
+        numpyro.deterministic(f"C_{name}", theta[2 * n_freq + i] * _OFFSET_PRIOR_SD)
+    for b, row in zip(blocks, rows):
+        known = 0.0 if b["known_offset"] is None else b["known_offset"]
+        numpyro.deterministic(f"y_pred_{b['name']}", row @ theta + known)

@@ -9,6 +9,12 @@ to the author's original PhD-era CREAM Fortran implementation, since it's
 easy to *assume* a modern stack is strictly better without checking what
 specifically changed.
 
+For *which* settings to use and when (solver, mass matrix, warmup, chains,
+grids, priors), see [`fitting_guide.md`](fitting_guide.md). Since CLAUDE.md
+decision #21, `dense_mass=True` is the default, and the diagonal-versus-
+dense comparison below describes the setting you'd now have to opt *out*
+to.
+
 ## 1. Hamiltonian Monte Carlo, in brief
 
 Plain Metropolis-Hastings proposes a new point by taking a small random
@@ -79,12 +85,13 @@ like real mass does (a heavier object moves less for the same kick). This
 is the **mass matrix**, and NUTS's momentum-sampling and kinetic-energy
 term (`p^T M^-1 p / 2`) both depend on it directly.
 
-- **Diagonal mass matrix** (NumPyro's default): one independent scale per
+- **Diagonal mass matrix** (NumPyro's default, and `echofit`'s until decision
+  #21; now `dense_mass=False`): one independent scale per
   parameter, estimated from each parameter's own variance during warmup.
   This corrects for parameters being on very different numeric scales
   (`inclination` in tens of degrees vs. `tau_drw` in tens of days), but it
   can only stretch/shrink along the existing coordinate axes.
-- **Dense mass matrix** (`dense_mass=True`): the *full* covariance matrix
+- **Dense mass matrix** (`dense_mass=True`, `echofit`'s default): the *full* covariance matrix
   across all parameters, estimated during warmup. This can also *rotate*
   the implied step directions to align with correlations between
   parameters, not just rescale each one independently.
@@ -143,11 +150,19 @@ second comparison run at 800 warmup still showed 5%, right at the
 threshold `tests/test_recovery.py` itself uses for "trust this fit"). This
 is a one-off warmup-phase cost, not a per-sample one, so it doesn't erode
 the wall-time win on any run long enough for the sampling phase to
-dominate -- but it does mean `dense_mass=True` isn't a strict "free"
-win to switch on blindly: check `ef.extra_fields["diverging"]` after a
-real run and raise `num_warmup` (or `target_accept_prob`) if the
-divergence rate looks high, the same way you'd check for any other NUTS
-run.
+dominate. It is why a dense matrix, now the default, still wants a
+reasonable `num_warmup` (the default 1000 is fine; a few dozen is not):
+check `ef.extra_fields["diverging"]` after a real run and raise
+`num_warmup` if the divergence rate looks high, the same way you'd check
+any other NUTS run. (`target_accept_prob` would also help, but isn't
+currently exposed on `EchoFit.fit()`; see
+[`fitting_guide.md`](fitting_guide.md#target_accept_prob-085-not-exposed-on-fit).)
+
+On a later, larger benchmark (5 bands × 100 observations; see
+[`performance_improvements.md` §2](performance_improvements.md#2-dense-mass-matrix-by-default))
+the gap was bigger still: every diagonal-mass sample hit the 1023-step
+ceiling, against a median of 63 for dense, for 17× more effective samples
+per second overall.
 
 ## 3. JIT compilation
 
@@ -277,16 +292,19 @@ actual codebases.
 
 ## 6. Practical guidance
 
-```python
-# most real runs: try dense_mass, give it a longer warmup than you'd use
-# for the default, and check the divergence rate afterwards
-ef.fit(num_warmup=800, num_samples=2000, dense_mass=True)
-diverging = ef.extra_fields["diverging"]
-print(f"{diverging.sum()}/{len(diverging)} divergences")
+The full, per-setting guide now lives in [`fitting_guide.md`](fitting_guide.md).
+In brief:
 
-# if you want to see leapfrog-step counts yourself, request the extra field
-# directly (EchoFit.fit doesn't request num_steps by default -- it isn't
-# used anywhere downstream, unlike potential_energy, decision #11)
+```python
+ef.fit()                       # dense mass, 1000 + 1000: the default
+diverging = ef.extra_fields["diverging"]
+print(f"{diverging.sum()}/{len(diverging)} divergences")   # a few % at most
+
+ef.fit(num_chains=4, chain_method="vectorized")   # free-lag bands, or any doubt
+ef.mcmc.print_summary()                            # ESS and R-hat per parameter
+
+# to see leapfrog-step counts yourself, request the extra field directly
+# (EchoFit.fit doesn't request num_steps: nothing downstream uses it)
 from numpyro.infer import MCMC, NUTS
 kernel = NUTS(reverberation_model, dense_mass=True)
 mcmc = MCMC(kernel, num_warmup=800, num_samples=300)
@@ -295,5 +313,5 @@ mcmc.run(rng_key, extra_fields=("num_steps", "diverging"), **model_kwargs)
 
 See also: `README.md`'s "Performance profiling" section,
 `scripts/profile_pipeline.py` for the one-off-vs-per-iteration cost
-breakdown that first surfaced this, and CLAUDE.md decision #17 for the
-full investigation this document expands on.
+breakdown that first surfaced this, and CLAUDE.md decisions #17 and #21 for
+the investigations this document draws on.

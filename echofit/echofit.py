@@ -115,16 +115,19 @@ class EchoFit:
     def __init__(
         self, M_BH: Optional[float] = None, title: Optional[str] = None, output_dir: Optional[str] = None,
         fixed_params: Optional[Dict[str, float]] = None, drw_prior: bool = False,
+        marginalise_linear: bool = False,
     ):
         self.M_BH = float(M_BH) if M_BH is not None else None
         self.title = title
         self.fixed_params: Dict[str, float] = dict(fixed_params) if fixed_params else {}
         self.drw_prior = bool(drw_prior)
+        self.marginalise_linear = bool(marginalise_linear)
         self.bands: Dict[str, dict] = {}
         self.driver_data: Optional[dict] = None
         self.freqs: Optional[np.ndarray] = None
         self.tau_grid: Optional[np.ndarray] = None
         self.mcmc = None
+        self.optimum: Optional[dict] = None
         self.samples: Optional[dict] = None
         self.extra_fields: dict = {}
         self._extra_fields_by_chain: dict = {}
@@ -302,6 +305,7 @@ class EchoFit:
             fixed_params=self.fixed_params,
             drw_prior=self.drw_prior,
             transfer_mats=transfer_matrices(self.tau_grid, self.freqs),
+            marginalise_linear=self.marginalise_linear,
         )
 
     def _sigma_drw_prior_scale(self) -> float:
@@ -393,6 +397,20 @@ class EchoFit:
                 values[f"S_{name}"] = max(float(np.std(d["y"])) / sigma_drw_scale, 1e-3)
         return init_to_value(values=values)
 
+    def _fit_init_strategy(self, num_chains: int, init_from_optimum: bool):
+        if not init_from_optimum:
+            return self._init_strategy(num_chains)
+        if getattr(self, "optimum", None) is None:
+            raise ValueError("fit(init_from_optimum=True) needs .optimise() to have been run first.")
+        if num_chains != 1:
+            raise ValueError(
+                "fit(init_from_optimum=True) is single-chain only: identical starts "
+                "defeat multi-chain R-hat checks (see _init_strategy's docstring)."
+            )
+        from numpyro.infer import init_to_value
+
+        return init_to_value(values=self._optimum_init_values())
+
     def _validate_before_fit(self):
         has_physical = any(d["lag_mode"] == "physical" for d in self.bands.values())
         has_free = any(d["lag_mode"] == "free" for d in self.bands.values())
@@ -441,6 +459,7 @@ class EchoFit:
         ef = cls(
             M_BH=manifest["M_BH"], title=title, output_dir=output_dir,
             fixed_params=manifest.get("fixed_params"), drw_prior=manifest.get("drw_prior", False),
+            marginalise_linear=manifest.get("marginalise_linear", False),
         )
         ef.run_dir = run_dir
         ef._fit_config = manifest["fit_config"]
@@ -493,6 +512,7 @@ class EchoFit:
         report_every: Optional[int] = None,
         progress_bar: bool = True,
         generate_report: bool = True,
+        init_from_optimum: bool = False,
     ):
         """Run NUTS and store the posterior samples on ``self.samples``.
 
@@ -511,19 +531,24 @@ class EchoFit:
         ``scripts/smoke_test.py`` to the run directory.
 
         dense_mass : bool, optional
-            Use a full covariance-based NUTS mass matrix instead of the
-            default diagonal one -- see ``inference.run_mcmc``'s docstring
-            and ``CLAUDE.md`` decision #17. Worth turning on for most real
-            runs: this model's parameters are correlated enough that the
-            default diagonal mass matrix makes NUTS spend nearly every
-            sample pinned at ``max_tree_depth``'s ceiling, ~7.5x more
-            leapfrog steps per sample than with ``dense_mass=True``, at no
-            cost to recovery accuracy. It does need a longer ``num_warmup``
-            than the default to adapt properly (the covariance matrix has
-            many more entries to estimate than a diagonal one) -- a
-            too-short warmup showed a real (if modest) rise in divergent
-            transitions; check ``ef.extra_fields["diverging"]`` and
-            increase ``num_warmup`` if it's above a few percent.
+            Full covariance-based NUTS mass matrix (the default, ``True``)
+            rather than a diagonal one (``False``) -- see
+            ``inference.run_mcmc``'s docstring and ``CLAUDE.md`` decisions
+            #17/#21. This model's parameters are correlated enough that a
+            diagonal mass matrix makes NUTS spend nearly every sample pinned
+            at ``max_tree_depth``'s ceiling: measured ~17x fewer effective
+            samples per wall-clock second than dense on a 5-band test set,
+            with the same posterior. A dense matrix needs a reasonably long
+            ``num_warmup`` to adapt (the default 1000 is fine; a few dozen is
+            not): check ``ef.extra_fields["diverging"]`` and increase
+            ``num_warmup`` if it's above a few percent. A resumed run keeps
+            whatever it was started with.
+
+        init_from_optimum : bool
+            Start NUTS at ``.optimise()``'s peak (call ``.optimise()``
+            first) rather than the data-anchored default guess. Single-chain
+            only, for the same reason as ``_init_strategy``'s: identical
+            starts defeat multi-chain R-hat checks.
 
         report_every : int, optional
             Only used on the checkpointed path. If given, ``report.html``
@@ -550,16 +575,18 @@ class EchoFit:
             num_warmup = 1000 if num_warmup is _UNSET else num_warmup
             num_samples = 1000 if num_samples is _UNSET else num_samples
             max_tree_depth = None if max_tree_depth is _UNSET else max_tree_depth
-            dense_mass = False if dense_mass is _UNSET else dense_mass
+            dense_mass = True if dense_mass is _UNSET else dense_mass
             rng_key = jax.random.PRNGKey(rng_seed)
             self.mcmc = run_mcmc(
                 reverberation_model, self._model_kwargs(), rng_key,
                 num_warmup=num_warmup, num_samples=num_samples, num_chains=num_chains,
                 max_tree_depth=max_tree_depth, chain_method=chain_method, progress_bar=progress_bar,
-                init_strategy=self._init_strategy(num_chains), dense_mass=dense_mass,
+                init_strategy=self._fit_init_strategy(num_chains, init_from_optimum), dense_mass=dense_mass,
             )
-            self.samples = self.mcmc.get_samples()
-            self._samples_by_chain = self.mcmc.get_samples(group_by_chain=True)
+            self._samples_by_chain = self._add_linear_draws(
+                self.mcmc.get_samples(group_by_chain=True), rng_seed
+            )
+            self.samples = {k: v.reshape((-1,) + v.shape[2:]) for k, v in self._samples_by_chain.items()}
             self.extra_fields = self.mcmc.get_extra_fields()
             self._extra_fields_by_chain = self.mcmc.get_extra_fields(group_by_chain=True)
             return self
@@ -582,7 +609,9 @@ class EchoFit:
         num_warmup = _pick(num_warmup, "num_warmup", 1000)
         num_samples = _pick(num_samples, "num_samples", 1000)
         max_tree_depth = _pick(max_tree_depth, "max_tree_depth", None)
-        dense_mass = _pick(dense_mass, "dense_mass", False)
+        # A run resumed from before dense_mass was recorded keeps its original
+        # (diagonal) mass matrix rather than switching mid-run to the new default.
+        dense_mass = _pick(dense_mass, "dense_mass", False if self._fit_config is not None else True)
         checkpoint_every = _pick(checkpoint_every, "checkpoint_every", 100)
 
         if self.run_dir is None:
@@ -624,6 +653,7 @@ class EchoFit:
                     fit_config=self._fit_config,
                     fixed_params=self.fixed_params,
                     drw_prior=self.drw_prior,
+                    marginalise_linear=self.marginalise_linear,
                 ))
 
         chunk_samples_so_far, chunk_extra_so_far = [], []
@@ -642,9 +672,11 @@ class EchoFit:
 
             if report_every is not None and n_done_total - last_report_at[0] >= report_every:
                 last_report_at[0] = n_done_total
-                self.samples = merged_samples
+                self._samples_by_chain = self._add_linear_draws(
+                    {k: v[None, ...] for k, v in merged_samples.items()}, rng_seed
+                )
+                self.samples = {k: v[0] for k, v in self._samples_by_chain.items()}
                 self.extra_fields = merged_extra
-                self._samples_by_chain = {k: v[None, ...] for k, v in merged_samples.items()}
                 self._extra_fields_by_chain = {k: v[None, ...] for k, v in merged_extra.items()}
                 reporting.generate_report(
                     self, self.run_dir, fit_seconds=time.time() - t0, title=self.title
@@ -657,14 +689,15 @@ class EchoFit:
             num_warmup=num_warmup, num_samples=num_samples, checkpoint_every=checkpoint_every,
             max_tree_depth=max_tree_depth, progress_bar=progress_bar,
             init_last_state=init_last_state, n_already_done=n_already_done,
-            on_chunk_done=_on_chunk_done, init_strategy=self._init_strategy(),
+            on_chunk_done=_on_chunk_done, init_strategy=self._fit_init_strategy(1, init_from_optimum),
             dense_mass=dense_mass,
         )
         fit_seconds = time.time() - t0
 
-        self.samples = _merge_dicts([prev_samples, samples_this_call])
+        merged = _merge_dicts([prev_samples, samples_this_call])
+        self._samples_by_chain = self._add_linear_draws({k: v[None, ...] for k, v in merged.items()}, rng_seed)
+        self.samples = {k: v[0] for k, v in self._samples_by_chain.items()}
         self.extra_fields = _merge_dicts([prev_extra, extra_this_call])
-        self._samples_by_chain = {k: v[None, ...] for k, v in self.samples.items()}
         self._extra_fields_by_chain = {k: v[None, ...] for k, v in self.extra_fields.items()}
         self.mcmc = None  # no single mcmc object spans all chunks in this path
 
@@ -676,6 +709,223 @@ class EchoFit:
             print(f"Report written to {self.run_dir / 'report.html'}")
 
         return self
+
+    def optimise(self, num_samples: int = 1000, num_restarts: int = 4, rng_seed: int = 0):
+        """Directly solve for the posterior, without MCMC: maximise the
+        linear-marginalised posterior over the ~10 nonlinear parameters with
+        L-BFGS, then approximate the posterior around that peak as a
+        Gaussian from its Hessian (the Laplace approximation), and draw the
+        linear parameters exactly for each Laplace sample.
+
+        On a 5-band, 500-point synthetic set, the whole first call took
+        ~27s (~5s of it L-BFGS; most of the rest one-off JIT compilation of
+        the Hessian and the posterior draws) against ~56s for a 500+500
+        dense-mass NUTS run, and its ``log_mdot`` posterior (0.194 +/- 0.012)
+        matched NUTS's (0.193 +/- 0.011). The gap widens for longer runs,
+        since NUTS's cost grows with the number of samples and this doesn't;
+        see ``docs/performance_improvements.md``. It is weakest for broad,
+        bounded, non-Gaussian parameters: inclination's posterior piles up
+        against its prior bound, which a Gaussian in unconstrained space
+        can't reproduce. Always uses the marginalised
+        model, whatever ``marginalise_linear`` is set to: its maximum is the
+        peak of the *marginal* posterior of the nonlinear parameters, which
+        is what the Laplace approximation needs (a joint maximum over the
+        Fourier coefficients too would be a different, biased estimator).
+
+        The Laplace approximation is only as good as the posterior is
+        Gaussian in NumPyro's unconstrained space: fine for a single,
+        well-constrained peak, not for a multimodal or strongly skewed
+        posterior (e.g. ``lag_mode="free"`` bands, CLAUDE.md's
+        rough-edges note), where ``.fit()`` remains the tool. A cheap check
+        is to compare against a short ``.fit(init_from_optimum=True)``.
+
+        Fills ``self.samples``/``self._samples_by_chain`` (one "chain" of
+        ``num_samples`` Laplace draws) exactly like ``.fit()``, so every
+        ``plot_*`` method and ``reporting.generate_report`` work on the
+        result; ``self.extra_fields`` stays empty (no NUTS diagnostics
+        exist). Also sets ``self.optimum`` (the constrained peak values),
+        ``self.laplace_covariance`` (unconstrained space),
+        ``self.optimise_result`` (scipy's ``OptimizeResult``) and
+        ``self.optimise_timings`` (seconds spent in L-BFGS, the Hessian and
+        the posterior draws, all including one-off JIT compilation, plus
+        ``newton_offset_in_sd``, the convergence diagnostic).
+
+        Parameters
+        ----------
+        num_samples : int
+            Laplace posterior draws to generate.
+        num_restarts : int
+            L-BFGS runs, from the data-anchored initial point
+            (``_init_strategy``) plus ``num_restarts - 1`` random
+            perturbations of it; the best is kept. Guards against a local
+            optimum at negligible cost.
+        rng_seed : int
+            Seeds the restart perturbations and the Laplace/linear draws.
+        """
+        from jax.flatten_util import ravel_pytree
+        from numpyro.infer.util import constrain_fn, initialize_model
+        from scipy.optimize import minimize
+
+        if self.freqs is None or self.tau_grid is None:
+            self.build_grid()
+        self._validate_before_fit()
+
+        kwargs = dict(self._model_kwargs(), marginalise_linear=True)
+        info = initialize_model(
+            jax.random.PRNGKey(rng_seed), reverberation_model, model_kwargs=kwargs,
+            init_strategy=self._init_strategy(1),
+        )
+        z0, unravel = ravel_pytree(info.param_info.z)
+        potential = lambda z: info.potential_fn(unravel(z))
+        value_and_grad = jax.jit(jax.value_and_grad(potential))
+
+        def objective(z):
+            v, g = value_and_grad(jnp.asarray(z, dtype=z0.dtype))
+            return float(v), np.asarray(g, dtype=np.float64)
+
+        timings = {}
+        t0 = time.perf_counter()
+        rng = np.random.default_rng(rng_seed)
+        starts = [np.asarray(z0)] + [np.asarray(z0) + 0.5 * rng.normal(size=z0.shape) for _ in range(num_restarts - 1)]
+        # Tolerances matched to a float32 objective: the default ftol (~2e-9
+        # relative) is below float32's own resolution (~1e-7), so L-BFGS's line
+        # search otherwise "fails" right at the optimum it has already found.
+        options = dict(ftol=1e-7, gtol=1e-3, maxiter=1000)
+        results = [minimize(objective, x, jac=True, method="L-BFGS-B", options=options) for x in starts]
+        best = min((r for r in results if np.isfinite(r.fun)), key=lambda r: r.fun)
+        timings["lbfgs_seconds"] = time.perf_counter() - t0
+        timings["lbfgs_evaluations_total"] = int(sum(r.nfev for r in results))
+        # Newton polishing with the exact Hessian. L-BFGS alone can stop well
+        # short of the peak along the prior-dominated driver-amplitude/band-gain
+        # ridge (CLAUDE.md decision #13): on NGC 5548 it stopped 6.5 units of
+        # potential above it, with the implied Newton step 3.5 posterior standard
+        # deviations long. Each step is backtracked until the potential falls
+        # and only ever accepted if it does, so polishing can't make things
+        # worse; it stops once the implied step is under 0.01 standard
+        # deviations. Convergence is judged on that posterior scale rather than
+        # by L-BFGS's own flag, whose line search on a float32 objective often
+        # ends "abnormally" right at the optimum.
+        t0 = time.perf_counter()
+        hessian_fn = jax.jit(jax.hessian(potential))
+
+        def curvature(z):
+            h = np.asarray(hessian_fn(jnp.asarray(z, dtype=z0.dtype)), dtype=np.float64)
+            vals, vecs = np.linalg.eigh(0.5 * (h + h.T))
+            return vals, (vecs / np.clip(vals, 1e-8, None)) @ vecs.T
+
+        z_best, f_best = np.asarray(best.x, dtype=np.float64), float(best.fun)
+        eigvals, cov = curvature(z_best)
+        n_newton = 0
+        for _ in range(20):
+            step = cov @ objective(z_best)[1]
+            offset_in_sd = float(np.max(np.abs(step) / np.sqrt(np.diag(cov))))
+            if offset_in_sd < 0.01:
+                break
+            alpha = 1.0
+            while alpha > 1e-3 and not objective(z_best - alpha * step)[0] < f_best:
+                alpha *= 0.5
+            f_new = objective(z_best - alpha * step)[0]
+            if not f_new < f_best:
+                break
+            z_best, f_best = z_best - alpha * step, f_new
+            eigvals, cov = curvature(z_best)
+            n_newton += 1
+        best.x, best.fun = z_best, f_best
+        timings["hessian_and_newton_seconds"] = time.perf_counter() - t0
+        timings["newton_iterations"] = n_newton
+        timings["newton_offset_in_sd"] = offset_in_sd
+        if offset_in_sd > 0.25:
+            warnings.warn(
+                f"optimise(): the optimum may not have converged: one more Newton step would "
+                f"move it by {offset_in_sd:.2f} posterior standard deviations."
+            )
+        if eigvals.min() <= 0:
+            warnings.warn(
+                "optimise(): the Hessian at the optimum is not positive definite "
+                f"(smallest eigenvalue {eigvals.min():.3g}), so the peak is not a clean "
+                "Gaussian mode; clipping those directions. Treat the Laplace posterior "
+                "with suspicion and cross-check with .fit()."
+            )
+        z_hat = jnp.asarray(best.x, dtype=z0.dtype)
+
+        t0 = time.perf_counter()
+        z_draws = rng.multivariate_normal(best.x, cov, size=num_samples).astype(np.asarray(z0).dtype)
+        constrained = jax.vmap(lambda z: constrain_fn(reverberation_model, (), kwargs, unravel(z), return_deterministic=True))(
+            jnp.asarray(z_draws)
+        )
+        nonlinear = {k: np.asarray(v)[None, ...] for k, v in constrained.items()}
+
+        was_marginal = self.marginalise_linear
+        self.marginalise_linear = True
+        try:
+            self._samples_by_chain = self._add_linear_draws(nonlinear, rng_seed)
+        finally:
+            self.marginalise_linear = was_marginal
+        self.samples = {k: v[0] for k, v in self._samples_by_chain.items()}
+        self.extra_fields, self._extra_fields_by_chain = {}, {}
+        self.mcmc = None
+
+        self.optimum = {
+            k: np.asarray(v) for k, v in
+            constrain_fn(reverberation_model, (), kwargs, unravel(z_hat), return_deterministic=True).items()
+        }
+        self.laplace_covariance = cov
+        self.optimise_result = best
+        timings["draws_seconds"] = time.perf_counter() - t0
+        self.optimise_timings = timings
+        return self
+
+    def _optimum_init_values(self) -> dict:
+        """Initial values for every sample site of the model ``.fit()`` will
+        run, at ``.optimise()``'s peak: the nonlinear parameters directly,
+        and (when the fit samples them) the linear ones at their conditional
+        posterior mean given that peak, via ``draw_linear=True`` with
+        ``linear_eps`` pinned to zero."""
+        from numpyro import handlers
+
+        values = {k: v for k, v in self.optimum.items() if np.ndim(v) == 0 and not k.startswith("y_pred_")}
+        if self.marginalise_linear:
+            return values
+        kwargs = dict(self._model_kwargs(), marginalise_linear=True, draw_linear=True)
+        n_linear = 2 * len(self.freqs) + sum(
+            f"C_{n}" not in self.fixed_params
+            for n in list(self.bands) + (["driver"] if self.driver_data is not None else [])
+        )
+        substituted = dict(values, linear_eps=jnp.zeros(n_linear))
+        trace = handlers.trace(handlers.substitute(handlers.seed(reverberation_model, 0), substituted)).get_trace(**kwargs)
+        for name in ["S_raw", "C_raw"] + [f"C_{n}" for n in list(self.bands) + ["driver"]]:
+            if name in trace and name not in self.fixed_params:
+                values[name] = np.asarray(trace[name]["value"])
+        return values
+
+    def _add_linear_draws(self, samples_by_chain: dict, rng_seed: int) -> dict:
+        """With ``marginalise_linear``, NUTS never samples the driver's
+        Fourier coefficients or the offsets. Draw them here, once per
+        posterior sample, from their exact conditional Gaussian posterior
+        given that sample's nonlinear parameters (``reverberation_model(...,
+        draw_linear=True)`` via ``numpyro.infer.Predictive``), and add them
+        under the same site names the default model uses (``S_raw``,
+        ``C_raw``, ``S``, ``C``, ``C_{band}``, ``C_driver``, ``y_pred_*``),
+        so every plot/report/saved chain works unchanged. A no-op
+        otherwise. Uses its own fixed key (derived from ``rng_seed``), so
+        re-running the same fit reproduces the same draws.
+        """
+        if not self.marginalise_linear:
+            return samples_by_chain
+        from numpyro.infer import Predictive
+
+        n_chains, n_draws = next(iter(samples_by_chain.values())).shape[:2]
+        flat = {k: jnp.reshape(jnp.asarray(v), (-1,) + v.shape[2:]) for k, v in samples_by_chain.items()}
+        names = list(self.bands) + (["driver"] if self.driver_data is not None else [])
+        return_sites = ["S_raw", "C_raw", "S", "C"] + [f"y_pred_{n}" for n in names]
+        return_sites += [f"C_{n}" for n in names if f"C_{n}" not in self.fixed_params]
+        draws = Predictive(reverberation_model, posterior_samples=flat, return_sites=return_sites)(
+            jax.random.fold_in(jax.random.PRNGKey(rng_seed), 1), **self._model_kwargs(), draw_linear=True,
+        )
+        out = dict(samples_by_chain)
+        for k, v in draws.items():
+            out[k] = np.asarray(v).reshape((n_chains, n_draws) + v.shape[1:])
+        return out
 
     def _save_chains(self, run_dir):
         """Save the final posterior. ``chains.npz`` (plain numpy, no extra

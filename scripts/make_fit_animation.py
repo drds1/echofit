@@ -152,7 +152,13 @@ def main():
     for name, d in data["bands"].items():
         ef.add_lightcurve(name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
     ef.build_grid(n_freq=20, n_tau=150)
-    ef.fit(rng_seed=args.seed, num_warmup=args.num_warmup, num_samples=args.num_frames, progress_bar=False)
+    # Diagonal mass matrix on purpose: a dense one (the fit default, CLAUDE.md
+    # decision #21) can't adapt in this deliberately tiny warmup, and the
+    # point here is to watch an early, still-searching chain anyway.
+    ef.fit(
+        rng_seed=args.seed, num_warmup=args.num_warmup, num_samples=args.num_frames,
+        progress_bar=False, dense_mass=False,
+    )
 
     all_t = np.concatenate([d["t"] for d in ef.bands.values()])
     t_fine = jnp.linspace(all_t.min() - 5.0, all_t.max() + 5.0, 200)

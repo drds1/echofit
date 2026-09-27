@@ -169,6 +169,50 @@ def test_dense_mass_persists_across_resume(tmp_path):
     assert len(ef2.samples["log_mdot"]) == 10
 
 
+def test_dense_mass_is_the_default(monkeypatch):
+    """CLAUDE.md decision #21 flipped the default to a dense mass matrix
+    (~17x more effective samples per second than diagonal on this model)."""
+    import echofit.inference as inference_mod
+
+    seen = {}
+    real_nuts = inference_mod.NUTS
+
+    def spy_nuts(model, **kwargs):
+        seen.update(kwargs)
+        return real_nuts(model, **kwargs)
+
+    monkeypatch.setattr(inference_mod, "NUTS", spy_nuts)
+    data = generate_synthetic_dataset(M_BH=1e8, bands={"g": 4770.0}, n_obs_per_band=15, n_freq=6, n_tau=30, seed=0)
+    ef = EchoFit(M_BH=1e8)
+    d = data["bands"]["g"]
+    ef.add_lightcurve("g", wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
+    ef.build_grid(n_freq=6, n_tau=30)
+    ef.fit(num_warmup=5, num_samples=5, progress_bar=False)
+    assert seen.get("dense_mass") is True
+
+
+def test_resumed_run_without_recorded_dense_mass_stays_diagonal(tmp_path):
+    """A checkpoint written before dense_mass was persisted must not switch
+    to the new dense default partway through its run."""
+    import json
+
+    data = generate_synthetic_dataset(M_BH=1e8, bands={"g": 4770.0}, n_obs_per_band=15, n_freq=6, n_tau=30, seed=0)
+    ef = EchoFit(M_BH=1e8, title="old_manifest_test", output_dir=str(tmp_path))
+    d = data["bands"]["g"]
+    ef.add_lightcurve("g", wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
+    ef.build_grid(n_freq=6, n_tau=30)
+    ef.fit(rng_seed=0, num_warmup=5, num_samples=5, checkpoint_every=5, dense_mass=False,
+           progress_bar=False, generate_report=False)
+    manifest_path = ef.run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["fit_config"]["dense_mass"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    ef2 = EchoFit.resume("old_manifest_test", output_dir=str(tmp_path))
+    ef2.fit(num_samples=10, progress_bar=False, generate_report=False)
+    assert ef2._fit_config.get("dense_mass", False) is False
+
+
 def test_save_chains_falls_back_gracefully_when_netcdf_write_fails(tmp_path, monkeypatch):
     """The ArviZ/netCDF write in _save_chains is documented as best-effort
     (CLAUDE.md) -- confirm the fallback actually works, not just that the
