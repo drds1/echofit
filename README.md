@@ -253,6 +253,8 @@ echofit/
                           generate_free_lag_dataset (free-lag bands + driver)
                           for tests / the demo notebook
 docs/
+    fitting_guide.md      every setting, its default, and when to change it:
+                          solver choice, NUTS options, grids, priors, lag modes
     thin_disk_response.md  how thin_disk_response is computed, with
                           scaling-law verification charts
     mcmc_implementation.md  how the NUTS/HMC inference works, the
@@ -425,7 +427,9 @@ free-lag corners only when the fit actually has those parameters, and the
 BOF plot only when `extra_fields` has `potential_energy` (missing only for
 a checkpoint resumed from before this feature existed).
 
-See `notebooks/demo.ipynb` for the full walkthrough.
+See `notebooks/demo.ipynb` for the full walkthrough, and
+[`docs/fitting_guide.md`](docs/fitting_guide.md) for every setting, its
+default, and when to change it.
 
 ### ⚡ Direct solve, no MCMC
 
