@@ -46,9 +46,9 @@ ls -l ngc5548_storm_data/
 #                 Pancoast et al. 2014). Using the Paper VI value below,
 #                 since it's the directly comparable analysis; check the
 #                 current literature before trusting either.
-#   --dense-mass  worth it for a model this size (13 bands' worth of
-#                 S_band/C_band, plus the driver's own Fourier
-#                 coefficients) -- see CLAUDE.md decision #17.
+#   (dense NUTS mass matrix: now the default, and worth it for a model
+#   this size -- 13 bands' worth of S_band/C_band plus the driver's own
+#   Fourier coefficients; see CLAUDE.md decisions #17/#21.)
 # ---------------------------------------------------------------------
 echo
 echo "== Step 2: quick 4-band look (no checkpointing) =="
@@ -60,7 +60,6 @@ $RUN_PY scripts/fit_lightcurves.py \
     --band z 9157 ngc5548_storm_data/z_band.txt \
     --num-warmup 400 \
     --num-samples 400 \
-    --dense-mass \
     --output-dir ngc5548_quick_look
 
 echo
@@ -90,7 +89,6 @@ $RUN_PY scripts/fit_lightcurves.py \
     --band z 9157 ngc5548_storm_data/z_band.txt \
     --num-warmup 800 \
     --num-samples 1000 \
-    --dense-mass \
     --checkpoint-every 200 \
     --report-every 400 \
     --output-dir outputs

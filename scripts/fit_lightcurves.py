@@ -101,16 +101,15 @@ def _parse_args():
     parser.add_argument("--chain-method", default="parallel", choices=("parallel", "vectorized", "sequential"))
     parser.add_argument("--max-tree-depth", type=int, default=None)
     parser.add_argument(
-        "--dense-mass", action="store_true",
+        "--diagonal-mass", action="store_true",
         help=(
-            "Use a full covariance-based NUTS mass matrix instead of the default "
-            "diagonal one -- see CLAUDE.md decision #17. Worth trying for most "
-            "real runs (found to cut leapfrog steps per sample ~7.5x at no cost "
-            "to recovery accuracy), but needs a longer --num-warmup to adapt "
-            "properly; check the report's divergence count and raise --num-warmup "
-            "if it's above a few percent."
+            "Use a diagonal NUTS mass matrix instead of the default dense one -- see "
+            "CLAUDE.md decisions #17/#21 (dense measured ~18x more effective samples "
+            "per second on this model). A dense matrix needs a reasonable --num-warmup "
+            "(the default 1000 is fine); check the report's divergence count."
         ),
     )
+    parser.add_argument("--dense-mass", action="store_true", help="No-op, kept for old command files: dense is now the default.")
     parser.add_argument(
         "--drw-prior", action="store_true",
         help=(
@@ -118,6 +117,25 @@ def _parse_args():
             "inferred alongside sigma_drw) instead of the default pure "
             "random-walk (RW) power-law prior (sigma_drw only, no tau_drw "
             "site) -- see CLAUDE.md decision #19."
+        ),
+    )
+    parser.add_argument(
+        "--marginalise-linear", action="store_true",
+        help=(
+            "Integrate the driver's Fourier coefficients and every band's offset "
+            "out analytically, so NUTS only samples the ~10 nonlinear parameters "
+            "-- see CLAUDE.md decision #21. Same posterior; the linear parameters "
+            "are drawn exactly afterwards, so every plot still works."
+        ),
+    )
+    parser.add_argument(
+        "--optimise", action="store_true",
+        help=(
+            "Direct solve instead of MCMC: EchoFit.optimise() (L-BFGS on the "
+            "linear-marginalised posterior + a Laplace Gaussian around the peak), "
+            "about half a 500-sample NUTS run's time; see CLAUDE.md decision #21. Fine for a "
+            "single well-constrained peak; use MCMC for free-lag or multimodal fits. "
+            "Ignores the MCMC-only options and --title's checkpointing."
         ),
     )
     parser.add_argument("--rng-seed", type=int, default=0)
@@ -146,7 +164,10 @@ def main():
     if not args.band and not args.free_lag_band:
         raise SystemExit("Add at least one --band or --free-lag-band.")
 
-    ef = EchoFit(M_BH=args.m_bh, title=args.title, output_dir=args.output_dir, drw_prior=args.drw_prior)
+    ef = EchoFit(
+        M_BH=args.m_bh, title=args.title, output_dir=args.output_dir, drw_prior=args.drw_prior,
+        marginalise_linear=args.marginalise_linear,
+    )
     for name, wavelength, path in args.band:
         t, y, yerr = _load_lightcurve(path)
         ef.add_lightcurve(name, wavelength=float(wavelength), t=t, y=y, yerr=yerr)
@@ -166,6 +187,13 @@ def main():
         build_grid_kwargs["tau_max"] = args.tau_max
     ef.build_grid(**build_grid_kwargs)
 
+    if args.optimise:
+        ef.optimise(num_samples=args.num_samples, rng_seed=args.rng_seed)
+        out_dir = Path(args.output_dir or "fit_output")
+        report_path = reporting.generate_report(ef, out_dir, title=args.title)
+        print(f"Done (direct solve) -> {report_path}")
+        return
+
     ef.fit(
         rng_seed=args.rng_seed,
         num_warmup=args.num_warmup,
@@ -173,7 +201,7 @@ def main():
         num_chains=args.num_chains,
         chain_method=args.chain_method,
         max_tree_depth=args.max_tree_depth,
-        dense_mass=args.dense_mass,
+        dense_mass=not args.diagonal_mass,
         checkpoint_every=args.checkpoint_every,
         report_every=args.report_every,
         progress_bar=not args.no_progress_bar,

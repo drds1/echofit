@@ -43,6 +43,7 @@ Regenerate with `python scripts/make_fit_animation.py`.*
   - [📥 3. Get the code and install its dependencies](#-3-get-the-code-and-install-its-dependencies)
   - [▶️ 4. Run things with `poetry run`](#-4-run-things-with-poetry-run)
 - [🚀 Quickstart](#-quickstart)
+  - [⚡ Direct solve, no MCMC](#-direct-solve-no-mcmc)
 - [📈 Fitting your own light curves, with saved/resumable runs](#-fitting-your-own-light-curves-with-savedresumable-runs)
   - [🖥️ Command file for running real light curve campaigns](#-command-file-for-running-real-light-curve-campaigns)
   - [🐍 From Python directly](#-from-python-directly)
@@ -258,6 +259,10 @@ docs/
                           dense_mass mass-matrix mechanism with before/after
                           charts, and how this compares to the original
                           CREAM Fortran implementation
+    performance_improvements.md  precomputed trig matrices, dense mass by
+                          default, linear-parameter marginalisation and the
+                          optimise() direct solve, blackbody disk colours:
+                          theory, maths and before/after benchmarks
 notebooks/
     demo.ipynb            end-to-end synthetic-data demo
 scripts/
@@ -266,6 +271,7 @@ scripts/
                           vs per-iteration costs (see "Performance profiling")
     plot_thin_disk_response_scalings.py  regenerates docs/thin_disk_response.md's charts
     plot_dense_mass_comparison.py  regenerates docs/mcmc_implementation.md's charts
+    plot_performance_analysis.py  regenerates docs/performance_improvements.md's charts
 tests/
     test_forward_model.py  basic sanity checks on the forward model
     test_recovery.py       end-to-end MCMC recovery test on synthetic data
@@ -420,6 +426,35 @@ BOF plot only when `extra_fields` has `potential_energy` (missing only for
 a checkpoint resumed from before this feature existed).
 
 See `notebooks/demo.ipynb` for the full walkthrough.
+
+### ⚡ Direct solve, no MCMC
+
+```python
+ef.optimise()                          # L-BFGS + Laplace posterior, no MCMC
+ef.plot_lightcurve_fits()              # every plot works on the result, as after .fit()
+ef.fit(init_from_optimum=True)         # optional: full NUTS, started at the optimum
+```
+
+With the nonlinear parameters (`log_mdot`, inclination, band gains,
+`sigma_drw`, ...) held fixed, every predicted light curve is *linear* in the
+driver's Fourier coefficients and the band offsets, which have Gaussian
+priors, so those ~130 parameters integrate out of the likelihood exactly.
+`optimise()` then maximises the remaining ~10-parameter marginal posterior
+with L-BFGS, fits a Gaussian to its curvature at the peak (the Laplace
+approximation) and draws the linear parameters exactly for every sample.
+On a 5-band synthetic benchmark the whole call took ~33 s (~5 s of it
+L-BFGS itself, most of the rest one-off JIT compilation) against ~53 s for a
+500 + 500 NUTS run, and reproduced NUTS's `log_mdot` posterior
+(0.194 ± 0.012 against 0.193 ± 0.011); the gap widens for longer runs.
+It assumes one well-defined, roughly Gaussian peak: it's weakest for
+broad parameters pressed against a prior bound (inclination, here), and
+wrong for anything multimodal, so keep using `.fit()` for free-lag bands
+and whenever the answer matters enough to check.
+`EchoFit(marginalise_linear=True)` runs NUTS on the same marginalised
+model; that's exact too, but measured *slower* than the default sampled
+model now that each sampled step is cheap. Everything above, with the
+maths, charts and before/after tables, is in
+[`docs/performance_improvements.md`](docs/performance_improvements.md).
 
 ## 📈 Fitting your own light curves, with saved/resumable runs
 
@@ -616,10 +651,11 @@ predicts).
 
 **Step 2** is a fast 4-band look (UV, u, g, z; no checkpointing) to check
 the pipeline runs end to end on real data first. **Step 3** is the full
-13-band managed/resumable fit (`--dense-mass`, since a model this size --
-13 bands' worth of `S_band`/`C_band` plus the driver's own Fourier
-coefficients -- benefits from it the same way the synthetic benchmarks in
-`CLAUDE.md` decision #17 do); expect this one to take a while. **Step 4**
+13-band managed/resumable fit (with the default dense mass matrix, which a
+model this size -- 13 bands' worth of `S_band`/`C_band` plus the driver's
+own Fourier coefficients -- benefits from the same way the synthetic
+benchmarks in `CLAUDE.md` decisions #17/#21 do); expect this one to take a
+while. **Step 4**
 resumes it, the same pattern as `run_example_fit.sh`.
 
 **On `M_BH`**: the two STORM papers this workflow is built around don't
@@ -710,8 +746,8 @@ something to keep committed and let go stale).
 
 **What this actually found**: every forward-model component is
 sub-millisecond, so the real per-iteration cost is almost entirely NUTS
-itself running long leapfrog trajectories, and `EchoFit.fit(dense_mass=True)`
-cuts that ~7.5x at no loss of recovery accuracy -- see `CLAUDE.md` decision
+itself running long leapfrog trajectories, and a dense mass matrix (now
+the default) cuts that ~7.5x at no loss of recovery accuracy -- see `CLAUDE.md` decision
 #17 for the full investigation and the warmup-length tradeoff that comes
 with it, and [`docs/mcmc_implementation.md`](docs/mcmc_implementation.md)
 for how NUTS and the `dense_mass` mass-matrix mechanism actually work
@@ -872,8 +908,8 @@ This is a research scaffold, not a validated production pipeline:
   lag) recovers well, but `inclination`, `sigma_drw`, and `tau_drw` recover
   only loosely (wide/biased posteriors) even with zero divergent
   transitions: NUTS tends to spend most samples at its max-tree-depth
-  ceiling on this model (`dense_mass=True` substantially reduces this --
-  see decision #17). Treat those three parameters'
+  ceiling on this model with a diagonal mass matrix (the dense one, now the
+  default, substantially reduces this -- see decisions #17/#21). Treat those three parameters'
   posteriors with extra scepticism on real data until this is investigated
   further; `EchoFit.fit()` exposes `max_tree_depth` and `chain_method` if
   you want to bound worst-case sampling cost or add cheap diagnostic chains

@@ -83,7 +83,7 @@ def _run_synthetic(args):
     t0 = time.time()
     ef.fit(
         rng_seed=0, num_warmup=args.num_warmup, num_samples=args.num_samples,
-        num_chains=1, progress_bar=False, dense_mass=args.dense_mass,
+        num_chains=1, progress_bar=False, dense_mass=not args.diagonal_mass,
     )
     dt = time.time() - t0
 
@@ -128,7 +128,7 @@ def _run_ngc5548(args):
     t0 = time.time()
     ef.fit(
         rng_seed=0, num_warmup=args.num_warmup, num_samples=args.num_samples,
-        num_chains=1, progress_bar=False, dense_mass=args.dense_mass,
+        num_chains=1, progress_bar=False, dense_mass=not args.diagonal_mass,
     )
     dt = time.time() - t0
 
@@ -193,8 +193,8 @@ def main():
         help="ngc5548 dataset only. Defaults to the Starkey et al. 2017 (STORM Paper VI) value; see README.md.",
     )
     parser.add_argument(
-        "--dense-mass", action="store_true",
-        help="Passed through to EchoFit.fit() -- see CLAUDE.md decision #17. Off by default here too.",
+        "--diagonal-mass", action="store_true",
+        help="Use a diagonal NUTS mass matrix instead of EchoFit.fit()'s dense default -- see CLAUDE.md decisions #17/#21.",
     )
     args = parser.parse_args()
     if args.outdir is None:
