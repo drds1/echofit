@@ -17,6 +17,8 @@ The public entry point is the :class:`EchoFit` class::
     ef.plot_lightcurve_fits()
 """
 
+from importlib.metadata import PackageNotFoundError, version as _version
+
 from .echofit import EchoFit
 from .forward_model import lag_scaling, response_function, compute_echo
 from .synthetic import generate_synthetic_dataset
@@ -29,4 +31,9 @@ __all__ = [
     "generate_synthetic_dataset",
 ]
 
-__version__ = "0.1.0"
+# Read from the installed package's metadata, so pyproject.toml is the one
+# place the version is set (see docs/releasing.md).
+try:
+    __version__ = _version("pycream2")
+except PackageNotFoundError:  # imported from a source tree that was never installed
+    __version__ = "0+unknown"

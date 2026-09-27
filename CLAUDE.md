@@ -17,7 +17,10 @@ release). The `EchoFit` class and its module `pycream2/echofit.py` kept
 their old names deliberately, to keep the user-facing API unchanged; don't
 treat that as a missed rename. Published work should cite Starkey, Horne &
 Villforth (2016): keep `CITATION.cff` and README's "Citing pycream2"
-section in step with each other and with `pyproject.toml`'s version.
+section in step with each other. The version lives in `pyproject.toml`
+and `CITATION.cff` only (`tests/test_version_consistency.py` checks they
+match; `pycream2.__version__` reads the installed metadata);
+`docs/releasing.md` is the release procedure.
 
 ## Key design decisions (don't relitigate without reason)
 

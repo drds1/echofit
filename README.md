@@ -296,6 +296,7 @@ docs/
                           default, linear-parameter marginalisation and the
                           optimise() direct solve, blackbody disk colours:
                           theory, maths and before/after benchmarks
+    releasing.md          how to bump the version and publish a release to PyPI
 notebooks/
     demo.ipynb            end-to-end synthetic-data demo
 scripts/
@@ -329,6 +330,9 @@ into any Python 3.10+ environment:
 ```bash
 pip install pycream2
 ```
+
+(Maintainers: [`docs/releasing.md`](docs/releasing.md) covers how to
+publish a new version.)
 
 To work on the code itself (run the tests, the scripts or the demo
 notebook), install from source instead. The steps below assume nothing is already set up beyond a normal Linux (or
