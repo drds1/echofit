@@ -3,7 +3,7 @@
 How to publish a new version of `pycream2` to
 [PyPI](https://pypi.org/project/pycream2/). Every release is a GitHub
 release: publishing one triggers
-[`.github/workflows/publish.yml`](../.github/workflows/publish.yml), which
+[`.github/workflows/publish.yml`](https://github.com/drds1/pycream2/blob/main/.github/workflows/publish.yml), which
 builds the package and uploads it to PyPI. Nobody uploads by hand, and no
 API token is stored anywhere.
 

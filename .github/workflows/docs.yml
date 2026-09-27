@@ -1,0 +1,63 @@
+name: Docs
+
+# Builds the MkDocs site (mkdocs.yml, docs/) and publishes it to GitHub
+# Pages at https://drds1.github.io/pycream2/. Runs when the docs or the
+# docstrings they render change on main, on each release, and on demand.
+# One-time set-up: repository Settings -> Pages -> Source: "GitHub Actions".
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "pycream2/**"
+      - ".github/workflows/docs.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      # Only the docs group: mkdocstrings reads the source statically, so the
+      # package itself (JAX etc.) never needs installing here.
+      - name: Install MkDocs
+        run: poetry install --only docs --no-root
+
+      # --strict fails the build on broken links or unparseable docstrings,
+      # rather than publishing a site with holes in it.
+      - name: Build site
+        run: poetry run mkdocs build --strict --site-dir site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1022,6 +1022,10 @@ poetry run python scripts/profile_pipeline.py  # one-off perf snapshot: where
                                                 # pipeline -> profiling_output/
                                                 # (gitignored, ~a few minutes)
 poetry run jupyter notebook notebooks/demo.ipynb
+poetry install --with docs && poetry run mkdocs serve  # docs site preview at
+                                                        # http://127.0.0.1:8000;
+                                                        # CI deploys it to GitHub Pages
+                                                        # (.github/workflows/docs.yml)
 ```
 
 ## Style notes

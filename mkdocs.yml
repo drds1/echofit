@@ -1,0 +1,86 @@
+site_name: pycream2
+site_description: Bayesian AGN continuum reverberation mapping with JAX and NumPyro, the successor to CREAM.
+site_url: https://drds1.github.io/pycream2/
+repo_url: https://github.com/drds1/pycream2
+repo_name: drds1/pycream2
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; David Starkey. MIT licence.
+
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - User guide:
+      - Fitting guide: fitting_guide.md
+      - Thin-disk response function: thin_disk_response.md
+  - Under the hood:
+      - How the MCMC works: mcmc_implementation.md
+      - Performance and the direct solve: performance_improvements.md
+  - API reference: api.md
+  - Development:
+      - Releasing: releasing.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: numpy
+            show_source: false
+            show_root_heading: true
+            members_order: source
+            separate_signature: true
+            show_signature_annotations: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.details
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+validation:
+  links:
+    not_found: warn
+    anchors: warn

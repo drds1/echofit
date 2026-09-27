@@ -42,8 +42,21 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "pre-commit>=3.5", "jupyter", "ipykernel", "Pillow"]
 
+# Documentation site build (mkdocs.yml): `poetry install --with docs`. A Poetry
+# group rather than an extra, so it never appears in the published package's
+# metadata. MkDocs 2.0 drops the plugin system mkdocstrings needs, so stay on 1.x.
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+mkdocs = ">=1.6,<2"
+mkdocs-material = ">=9.5,<10"
+mkdocstrings = {version = ">=0.26,<1", extras = ["python"]}
+ruff = "*"  # lets mkdocstrings format long signatures
+
 [project.urls]
 Homepage = "https://github.com/drds1/pycream2"
+Documentation = "https://drds1.github.io/pycream2/"
 Repository = "https://github.com/drds1/pycream2"
 Issues = "https://github.com/drds1/pycream2/issues"
 "Original CREAM (pycecream)" = "https://github.com/drds1/pycecream"

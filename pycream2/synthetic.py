@@ -218,6 +218,8 @@ def generate_free_lag_dataset(
     docstring: a driver light curve is essentially required to pin down
     these lags' absolute scale.
 
+    Parameters not listed below mirror :func:`generate_synthetic_dataset`.
+
     Parameters
     ----------
     lines : dict, optional
@@ -231,7 +233,6 @@ def generate_free_lag_dataset(
     n_obs_driver : int
         Observation count for the driver light curve (only used if
         ``include_driver``).
-    Other parameters mirror :func:`generate_synthetic_dataset`.
 
     Returns
     -------

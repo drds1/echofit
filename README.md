@@ -18,6 +18,9 @@ a rewrite in pure JAX/NumPyro, with no Fortran compiler needed, gradient-based
 pip install pycream2
 ```
 
+📚 **Documentation: [drds1.github.io/pycream2](https://drds1.github.io/pycream2/)**
+(user guide, background and API reference).
+
 If you use `pycream2` in published work, please cite Starkey, Horne &
 Villforth (2016): see [📝 Citing pycream2](#-citing-pycream2).
 
