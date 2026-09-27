@@ -21,7 +21,10 @@ tests on synthetic data, and example usage.
 accumulate -- wide early, narrowing as the chain converges), each band
 coloured by its real-world wavelength (X-ray black, UV violet, visible its
 actual spectral colour, IR+ reddish), a face-on disk-temperature view
-(titled with the frame's current log_mdot/inclination), and a side-on
+with each ring drawn in the true blackbody colour of its temperature
+(blue-white at the hot centre, orange-red in the cool outer disk, on a
+fixed Kelvin colour bar; titled with the frame's current
+log_mdot/inclination), and a side-on
 schematic where the disk line tilts with inclination while the eye-on-a-
 sphere observer and its line of sight stay fixed, and a Badness-of-Fit
 trace growing one point per sample -- all early in a NUTS chain (short
@@ -228,7 +231,9 @@ echofit/
                           (accretion-disk physical response), build_thin_disk_response_fast
                           (precomputed-template fast path for thin_disk_response),
                           tophat_response_free (free-lag mode), transfer_coeffs,
-                          compute_echo, driver_at
+                          compute_echo, driver_at, transfer_matrices/fourier_basis
+                          (fixed trig matrices precomputed once per fit, ~5x
+                          faster per NUTS step)
     responses.py         a small registry (register_response/get_response) for
                           swapping in a built-in or custom physical response
     model.py            NumPyro model (reverberation_model) + DRW prior scale

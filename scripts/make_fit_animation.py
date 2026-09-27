@@ -15,10 +15,15 @@ Three columns, one row per band plus a shared top row (the light-curve
 column is wider than the other two -- ``width_ratios``):
 
 * top-left: the inferred driving light curve X(t).
-* top-middle: a face-on, illustrative view of the accretion disk, coloured
-  by ``forward_model.disk_temperature_profile`` (Shakura-Sunyaev viscous
-  temperature, hotter shown brighter here) -- geometry is fixed, only the
-  colour scale changes per frame as log_mdot varies. The title reports the
+* top-middle: a face-on, illustrative view of the accretion disk, each
+  ring drawn in the true colour of a blackbody at its
+  ``forward_model.disk_temperature_profile`` (Shakura-Sunyaev viscous)
+  temperature, via ``plotting.blackbody_to_colour`` -- blue-white at the
+  hot centre, through white, to orange-red in the cool outer disk, on a
+  black background. The colour-to-temperature mapping (a log-temperature
+  colour bar in Kelvin) is fixed across frames, so a change in colour is a
+  genuine change in temperature as log_mdot varies, not a rescaled colour
+  map. Geometry is fixed; only the colours change per frame. The title reports the
   frame's current log_mdot/inclination values.
 * top-right: a schematic side-on view showing the disk plane as a line
   through the centre, tilting by the inclination angle (vertical at
@@ -82,12 +87,18 @@ from echofit.forward_model import (
     disk_temperature_profile, _schwarzschild_radius_light_days, lag_scaling,
 )
 from echofit.synthetic import generate_synthetic_dataset
-from echofit.plotting import wavelength_to_colour, response_function_xlim
+from matplotlib.colors import ListedColormap, LogNorm
+
+from echofit.plotting import wavelength_to_colour, response_function_xlim, blackbody_to_colour
 
 # Purely for the illustrative disk panels -- the fit itself may use bands
 # at other wavelengths; this just sets the pictures' colour/size scale.
 _DISK_REFERENCE_WAVELENGTH = 5000.0
-_DISK_N_R, _DISK_N_PHI = 40, 80
+_DISK_N_R, _DISK_N_PHI = 80, 80
+# Floor of the disk panel's colour scale: the zero-torque inner boundary sends
+# T -> 0 at the ISCO itself, and below ~1000 K a blackbody barely glows in the
+# visible, so extending the scale further would only compress the real range.
+_DISK_T_FLOOR_KELVIN = 1000.0
 
 
 def _draw_observer(ax, x, y, size):
@@ -193,14 +204,20 @@ def main():
     r_in = 3.0 * float(_schwarzschild_radius_light_days(ef.M_BH))
     tau_ref_per_sample = np.asarray(lag_scaling(log_mdot, _DISK_REFERENCE_WAVELENGTH, ef.M_BH))
     r_out = 6.0 * float(tau_ref_per_sample.max())
-    r_grid = np.linspace(r_in, r_out, _DISK_N_R)
+    # Geometric ring edges: resolves the small, hot inner disk (most of the
+    # colour change happens within ~tau_ref) without distorting the face-on
+    # geometry itself, which stays linear in radius.
+    r_grid = np.geomspace(r_in, r_out, _DISK_N_R)
+    r_mid = np.sqrt(r_grid[:-1] * r_grid[1:])
     phi_grid = np.linspace(0.0, 2.0 * np.pi, _DISK_N_PHI)
     R_grid, PHI_grid = np.meshgrid(r_grid, phi_grid, indexing="ij")
     X_faceon, Y_faceon = R_grid * np.cos(PHI_grid), R_grid * np.sin(PHI_grid)
+    # Each ring coloured by the temperature at its (geometric) midpoint, not
+    # its inner edge -- the innermost edge is the ISCO, where T -> 0.
     T_per_r = np.asarray(jax.vmap(
-        lambda lm: disk_temperature_profile(r_grid, lm, _DISK_REFERENCE_WAVELENGTH, ef.M_BH)
-    )(log_mdot))  # (n_frames, n_r)
-    T_grid_all = np.broadcast_to(T_per_r[:, :, None], (len(log_mdot_np), _DISK_N_R, _DISK_N_PHI))
+        lambda lm: disk_temperature_profile(r_mid, lm, _DISK_REFERENCE_WAVELENGTH, ef.M_BH)
+    )(log_mdot))  # (n_frames, n_r - 1)
+    T_grid_all = np.broadcast_to(T_per_r[:, :, None], (len(log_mdot_np), _DISK_N_R - 1, _DISK_N_PHI - 1))
 
     bof = 2.0 * np.asarray(ef.extra_fields["potential_energy"])
 
@@ -225,9 +242,20 @@ def main():
     ax_disk_temp.set_xticks([])
     ax_disk_temp.set_yticks([])
     disk_title = ax_disk_temp.set_title("", fontsize=8)
+    ax_disk_temp.set_facecolor("black")
+    # True blackbody colour per temperature, on one log-T scale shared by
+    # every frame (see module docstring).
+    T_lo = max(float(T_per_r.min()), _DISK_T_FLOOR_KELVIN)
+    T_hi = float(T_per_r.max())
+    blackbody_cmap = ListedColormap(blackbody_to_colour(np.geomspace(T_lo, T_hi, 256)))
+    blackbody_cmap.set_under(blackbody_to_colour(T_lo))
     disk_mesh = ax_disk_temp.pcolormesh(
-        X_faceon, Y_faceon, T_grid_all[0][:-1, :-1], cmap="inferno", shading="flat"
+        X_faceon, Y_faceon, T_grid_all[0], cmap=blackbody_cmap,
+        norm=LogNorm(vmin=T_lo, vmax=T_hi), shading="flat",
     )
+    cbar = fig.colorbar(disk_mesh, ax=ax_disk_temp, fraction=0.046, pad=0.02)
+    cbar.set_label("T (K)", fontsize=7)
+    cbar.ax.tick_params(labelsize=6)
 
     # -- disk-tilt panel: fixed observer/sightline, only the disk line rotates --
     L = r_out
@@ -314,7 +342,7 @@ def main():
             envelope_artists.append(ax_psi.fill_between(tau_grid_np, psi_pct[name][0, i], psi_pct[name][4, i], color=colour, alpha=0.15, zorder=0))
             envelope_artists.append(ax_psi.fill_between(tau_grid_np, psi_pct[name][1, i], psi_pct[name][3, i], color=colour, alpha=0.3, zorder=0))
 
-        disk_mesh.set_array(T_grid_all[i][:-1, :-1].ravel())
+        disk_mesh.set_array(T_grid_all[i].ravel())
         disk_title.set_text(f"log_mdot = {log_mdot_np[i]:.2f}, inclination = {inclination_np[i]:.1f}°")
 
         incl_rad = np.deg2rad(float(inclination_np[i]))

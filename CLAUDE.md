@@ -494,6 +494,17 @@ and package layout.
     observer and its dashed sightline are drawn once and never move.
     Both remain a simplified 2-D schematic, not a 3-D/raytraced render.
 
+    **The face-on panel is coloured in true blackbody colour, not an arbitrary colour map (another direct
+    request).** `plotting.blackbody_to_colour` integrates the Planck spectrum against the CIE 1931
+    colour-matching functions (Wyman, Sloan & Shirley 2013 analytic fit), converts XYZ to sRGB and
+    normalises brightness out (chromaticity only), so the disk runs blue-white at the hot centre, through
+    white near 6500 K, to orange-red outside. One fixed log-temperature scale (a Kelvin colour bar) is
+    shared by every frame, floored at 1000 K, because the zero-torque inner boundary sends T to ~0 exactly
+    at the ISCO, and an unfloored scale reached ~10 K there and produced NaN colours. Rings are coloured at
+    their geometric midpoint temperature on a geometric radial grid, so the small hot core is resolved
+    while the face-on geometry stays linear in radius. The hot (>10^4 K) zone genuinely is small (within
+    ~0.2 of the Wien radius); that is the physics, not a rendering fault.
+
     **Every band/driver panel also shows an expanding-window 68%/95%
     credible envelope** (`_expanding_percentiles`): frame `i`'s envelope
     is the percentiles of samples `0..i` only, not the full run, so it
@@ -780,6 +791,28 @@ and package layout.
     existed -- not a claim DRW is still the default). `tests/test_rw_prior.py` adds dedicated coverage for
     the new default path itself (site presence, `fixed_params` validation, resume persistence, plotting,
     and a `log_mdot` recovery check at the same rigour `test_recovery.py` already held the DRW path to).
+
+20. **The fixed trig matrices are precomputed once per fit (`forward_model.transfer_matrices`/
+    `fourier_basis`), not rebuilt on every gradient evaluation: ~34x faster per NUTS leapfrog step,
+    identical result.** Prompted by a direct question about porting the CREAM Fortran code's `itaumax`
+    early cut-off (checked in `cream_f90.f90`: it stops the real-space `(n_t, n_tau)` convolution
+    lookback at the first lag where `psigrid` returns to zero after being positive). Measured before
+    deciding, not assumed: in `echofit` the lag grid only enters via `transfer_coeffs`, and its cost was
+    almost entirely re-evaluating `cos`/`sin` of the fixed `(n_freq, n_tau)` phase matrix, per band, on
+    every step, not the length of the lookback. `tau_grid`, `freqs` and each light curve's observation
+    times never change during a fit, so `EchoFit._model_kwargs()` now precomputes the trapezoid-weighted
+    `(Wc, Ws)` (in float64, then cast) and each band's/driver's `(sin(w t), cos(w t))` basis, and
+    `reverberation_model` uses them via `transfer_mats=`/each dict's `"basis"` entry. Measured under
+    `jax.jit` (5 bands x 100 obs, `n_freq=60`, `n_tau=400`): potential+gradient 8.7ms -> 0.26ms; a
+    600-sample fit at `max_tree_depth=6` 48s -> 15s wall time, where JIT compilation now dominates;
+    `log_mdot` posterior unchanged. A cut-off on top would only save part of a ~0.03ms matvec, and could
+    only be static anyway, since `jax.jit` needs fixed shapes (a `psi`-dependent cut-off would still
+    multiply the same zeros). All the new arguments are optional (`transfer_coeffs(..., matrices=None)`,
+    `compute_echo(..., basis=None)`, `driver_at(..., basis=None)`, `reverberation_model(...,
+    transfer_mats=None)`), so plotting code and direct standalone calls keep the on-the-fly path
+    unchanged; `tests/test_precomputed_transfer.py` checks both paths agree, including the full model's
+    potential energy and gradient. Decision #2's closed-form Fourier convolution is untouched: this
+    only caches its fixed ingredients.
 
 ## Known rough edges / things to check before trusting results on real data
 

@@ -93,6 +93,58 @@ def wavelength_to_colour(wavelength_angstrom: float):
     return "firebrick"
 
 
+def _cie_colour_matching(wavelength_nm):
+    """CIE 1931 2-degree colour-matching functions x̄, ȳ, z̄ via the
+    multi-lobe Gaussian fit of Wyman, Sloan & Shirley (2013, JCGT 2, 1),
+    accurate to well within plotting needs and avoiding a tabulated
+    dataset dependency."""
+    lam = np.asarray(wavelength_nm, dtype=float)
+
+    def g(mu, s1, s2):
+        s = np.where(lam < mu, s1, s2)
+        return np.exp(-0.5 * ((lam - mu) / s) ** 2)
+
+    x = 1.056 * g(599.8, 37.9, 31.0) + 0.362 * g(442.0, 16.0, 26.7) - 0.065 * g(501.1, 20.4, 26.2)
+    y = 0.821 * g(568.8, 46.9, 40.5) + 0.286 * g(530.9, 16.3, 31.1)
+    z = 1.217 * g(437.0, 11.8, 36.0) + 0.681 * g(459.0, 26.0, 13.8)
+    return x, y, z
+
+
+def blackbody_to_colour(temperature_kelvin):
+    """The sRGB colour a blackbody at ``temperature_kelvin`` appears to the
+    eye: the Planck spectrum integrated against the CIE 1931 colour-matching
+    functions, converted XYZ -> linear sRGB (D65), normalised so the
+    brightest channel is 1 (chromaticity only, not luminosity), then
+    gamma-encoded. Hot (>~10^4 K) is blue-white, ~6500 K white, cooler
+    orange then deep red, i.e. what a real accretion disk's colour does
+    with radius.
+
+    Returns
+    -------
+    array, shape ``temperature_kelvin.shape + (3,)``, values in [0, 1].
+    """
+    # Below ~500 K a blackbody's visible spectrum is vanishingly faint and its
+    # colour has saturated at deep red anyway; the floor keeps the Planck
+    # integral finite (no underflow to 0/0) for arbitrarily cold input.
+    T = np.clip(np.atleast_1d(np.asarray(temperature_kelvin, dtype=float)), 500.0, None)
+    lam_nm = np.linspace(380.0, 780.0, 201)
+    xbar, ybar, zbar = _cie_colour_matching(lam_nm)
+    lam_m = lam_nm * 1e-9
+    hc_over_k = 1.438777e-2  # m K
+    # Planck B_lambda up to a constant (the normalisation below removes it).
+    planck = lam_m[None, :] ** -5 / np.expm1(hc_over_k / (lam_m[None, :] * T.reshape(-1, 1)))
+    xyz = np.stack([planck @ xbar, planck @ ybar, planck @ zbar], axis=-1)
+    xyz_to_rgb = np.array([
+        [3.2406, -1.5372, -0.4986],
+        [-0.9689, 1.8758, 0.0415],
+        [0.0557, -0.2040, 1.0570],
+    ])
+    rgb = np.clip(xyz @ xyz_to_rgb.T, 0.0, None)
+    rgb /= rgb.max(axis=-1, keepdims=True)
+    rgb = np.where(rgb <= 0.0031308, 12.92 * rgb, 1.055 * rgb ** (1.0 / 2.4) - 0.055)
+    return np.clip(rgb, 0.0, 1.0).reshape(np.shape(temperature_kelvin) + (3,))
+
+
 def _band_colours(bands: Dict[str, dict]):
     """Consistent, physically-motivated colour per band (see
     ``wavelength_to_colour``), ordered by wavelength."""

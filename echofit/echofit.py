@@ -29,7 +29,9 @@ import jax.numpy as jnp
 from . import model as _model
 from .model import reverberation_model
 from .inference import run_mcmc, run_mcmc_chunked
-from .forward_model import transfer_coeffs, compute_echo, driver_at, tophat_response_free
+from .forward_model import (
+    transfer_coeffs, compute_echo, driver_at, tophat_response_free, transfer_matrices, fourier_basis,
+)
 from .grid_utils import estimate_dt_min, graded_tau_grid, check_tau_grid_resolution
 from . import plotting
 from . import reporting
@@ -280,6 +282,7 @@ class EchoFit:
                 "wavelength": d["wavelength"],
                 "lag_mode": d["lag_mode"],
                 "fit_error_model": d.get("fit_error_model", False),
+                "basis": fourier_basis(self.freqs, d["t"]),
             }
             for name, d in self.bands.items()
         }
@@ -290,6 +293,7 @@ class EchoFit:
                 "y": jnp.asarray(self.driver_data["y"]),
                 "yerr": jnp.asarray(self.driver_data["yerr"]),
                 "fit_error_model": self.driver_data.get("fit_error_model", False),
+                "basis": fourier_basis(self.freqs, self.driver_data["t"]),
             }
         return dict(
             freqs=self.freqs, tau_grid=self.tau_grid, M_BH=self.M_BH,
@@ -297,6 +301,7 @@ class EchoFit:
             sigma_drw_prior_scale=self._sigma_drw_prior_scale(),
             fixed_params=self.fixed_params,
             drw_prior=self.drw_prior,
+            transfer_mats=transfer_matrices(self.tau_grid, self.freqs),
         )
 
     def _sigma_drw_prior_scale(self) -> float:
