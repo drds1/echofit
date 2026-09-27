@@ -334,6 +334,25 @@ trust. Leave it off for synthetic data, where the errors are exact by
 construction. Pin either term with `fixed_params` (for example
 `{"sigma_jitter_g": 0.0}`).
 
+It matters in practice, not just in principle. On all 13 NGC 5548 AGN
+STORM bands (2,632 points), with quoted errors of only 0.2 to 0.7% of the
+flux, the thin-disk model cannot reach the quoted-error noise floor:
+
+| 13 bands, dense NUTS, 500 + 300 | quoted errors | `fit_error_model=True` |
+|---|---|---|
+| divergences | 86 / 300 | 2 / 300 |
+| median leapfrog steps per sample | 1023 (the ceiling) | 511 |
+| minimum ESS | 4 | 32 |
+| `.optimise()` | non-positive-definite Hessian, failed | converged (offset 0.00 sd) |
+
+The fitted terms inflate the far-UV errors about 3 times and add jitter of
+1 to 3 times the quoted error to every band. Point-to-point scatter within a
+night is *consistent* with the quoted errors, so the errors are not wrong
+as photometry; the extra variance is model mismatch (and inter-telescope
+calibration) on longer timescales. Without the error model, `.optimise()`
+already fails from 7 bands onwards. `scripts/fit_lightcurves.py
+--fit-error-model` turns it on for every band.
+
 ### `add_driver_lightcurve`
 
 A direct, zero-lag observation of the driver (for example X-ray or far-UV

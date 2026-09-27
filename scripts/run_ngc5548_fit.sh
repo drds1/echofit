@@ -9,10 +9,20 @@
 # "Real-data worked example" section for the full story.
 #
 # Real data is slower than the synthetic examples elsewhere in this repo:
-# 13 bands, ~2200 data points total, real (irregular, gappy) cadence, from
+# 13 bands, ~2600 data points total, real (irregular, gappy) cadence, from
 # 16 different observatories. Step 2 below is a fast 4-band look to check
 # the pipeline end to end before committing to the full 13-band run in
-# Step 3, which can take a while (tens of minutes, hardware-dependent).
+# Step 3, which takes about 1.5 to 2 hours on a laptop CPU.
+#
+# Both steps pass --fit-error-model. Without it the full set does not fit:
+# measured on all 13 bands, dense-mass NUTS hit the 1023-step tree-depth
+# ceiling on every sample with 86/300 divergences and a minimum ESS of 4/300,
+# and .optimise() stopped at a non-positive-definite Hessian. With it: 2/300
+# divergences, minimum ESS 32/300, and NUTS and .optimise() agree on log_mdot
+# (1.62 +/- 0.05 vs 1.63). The quoted errors are fine point to point, but at
+# 0.2-0.7% of the flux they are far smaller than the thin-disk model's own
+# mismatch; the fitted error model inflates the far-UV errors ~3x and adds
+# jitter of 1-3x the quoted error to every band.
 #
 # Usage:
 #   ./scripts/run_ngc5548_fit.sh
@@ -58,6 +68,7 @@ $RUN_PY scripts/fit_lightcurves.py \
     --band u 3472 ngc5548_storm_data/u_band.txt \
     --band g 4776 ngc5548_storm_data/g_band.txt \
     --band z 9157 ngc5548_storm_data/z_band.txt \
+    --fit-error-model \
     --num-warmup 400 \
     --num-samples 400 \
     --output-dir ngc5548_quick_look
@@ -79,18 +90,19 @@ $RUN_PY scripts/fit_lightcurves.py \
     --band uv1479 1478.5 ngc5548_storm_data/uv1479_band.txt \
     --band uv1746 1746.0 ngc5548_storm_data/uv1746_band.txt \
     --band u 3472 ngc5548_storm_data/u_band.txt \
-    --band B 4369 ngc5548_storm_data/B_band.txt \
+    --band B 4369 ngc5548_storm_data/B_johnson_band.txt \
     --band g 4776 ngc5548_storm_data/g_band.txt \
-    --band V 5404 ngc5548_storm_data/V_band.txt \
+    --band V 5404 ngc5548_storm_data/V_johnson_band.txt \
     --band r 6176 ngc5548_storm_data/r_band.txt \
-    --band R 6440 ngc5548_storm_data/R_band.txt \
+    --band R 6440 ngc5548_storm_data/R_cousins_band.txt \
     --band i 7648 ngc5548_storm_data/i_band.txt \
-    --band I 8561 ngc5548_storm_data/I_band.txt \
+    --band I 8561 ngc5548_storm_data/I_cousins_band.txt \
     --band z 9157 ngc5548_storm_data/z_band.txt \
-    --num-warmup 800 \
-    --num-samples 1000 \
+    --fit-error-model \
+    --num-warmup 1000 \
+    --num-samples 3000 \
     --checkpoint-every 200 \
-    --report-every 400 \
+    --report-every 1000 \
     --output-dir outputs
 
 echo

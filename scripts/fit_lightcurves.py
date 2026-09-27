@@ -64,6 +64,19 @@ from pycream2.echofit import EchoFit
 from pycream2 import reporting
 
 
+def _check_distinct_files(bands):
+    """Refuse two bands that resolve to the same file, e.g. "r_band.txt" and
+    "R_band.txt" on a case-insensitive filesystem: the fit would otherwise
+    silently use one light curve twice, at two different wavelengths."""
+    seen = {}
+    for name, _, path in bands:
+        key = Path(path).resolve()
+        for other_name, other_key in seen.items():
+            if key == other_key or (key.exists() and other_key.exists() and key.samefile(other_key)):
+                raise SystemExit(f"Bands '{other_name}' and '{name}' both read the same file ({path}).")
+        seen[name] = key
+
+
 def _load_lightcurve(path: str):
     t, y, yerr = np.loadtxt(path, comments="#", unpack=True)
     return np.atleast_1d(t), np.atleast_1d(y), np.atleast_1d(yerr)
@@ -90,6 +103,12 @@ def _parse_args():
              "required to anchor any --free-lag-band.",
     )
     parser.add_argument("--m-bh", type=float, default=None, help="Fixed black hole mass, solar masses.")
+    parser.add_argument(
+        "--fit-error-model", action="store_true",
+        help="Fit an error rescale factor and extra jitter for every band (and the driver), "
+             "instead of trusting the quoted errors exactly. Recommended for real data: on "
+             "NGC 5548 all 13 bands only fit cleanly with it on.",
+    )
 
     parser.add_argument("--title", default=None, help="Run name -- enables checkpointed/resumable output management.")
     parser.add_argument("--resume", action="store_true", help="Resume the latest run under --title instead of starting a new fit.")
@@ -163,6 +182,7 @@ def main():
 
     if not args.band and not args.free_lag_band:
         raise SystemExit("Add at least one --band or --free-lag-band.")
+    _check_distinct_files(args.band + args.free_lag_band)
 
     ef = EchoFit(
         M_BH=args.m_bh, title=args.title, output_dir=args.output_dir, drw_prior=args.drw_prior,
@@ -170,13 +190,15 @@ def main():
     )
     for name, wavelength, path in args.band:
         t, y, yerr = _load_lightcurve(path)
-        ef.add_lightcurve(name, wavelength=float(wavelength), t=t, y=y, yerr=yerr)
+        ef.add_lightcurve(name, wavelength=float(wavelength), t=t, y=y, yerr=yerr,
+                          fit_error_model=args.fit_error_model)
     for name, wavelength, path in args.free_lag_band:
         t, y, yerr = _load_lightcurve(path)
-        ef.add_lightcurve(name, wavelength=float(wavelength), t=t, y=y, yerr=yerr, lag_mode="free")
+        ef.add_lightcurve(name, wavelength=float(wavelength), t=t, y=y, yerr=yerr, lag_mode="free",
+                          fit_error_model=args.fit_error_model)
     if args.driver:
         t, y, yerr = _load_lightcurve(args.driver)
-        ef.add_driver_lightcurve(t=t, y=y, yerr=yerr)
+        ef.add_driver_lightcurve(t=t, y=y, yerr=yerr, fit_error_model=args.fit_error_model)
 
     build_grid_kwargs = {}
     if args.n_freq is not None:

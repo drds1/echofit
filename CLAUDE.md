@@ -971,6 +971,21 @@ match; `pycream2.__version__` reads the installed metadata);
   context to avoid this; it's an invocation-time fix, not a reason to
   force a non-interactive backend inside `plotting.py` itself, which would
   break interactive use from the notebook.
+- **Real multi-band data needs `fit_error_model=True`: NGC 5548's full 13
+  bands don't fit without it.** Measured (not assumed) on all 13 AGN STORM
+  bands: dense NUTS pinned at 1023 leapfrog steps, 86/300 divergences,
+  minimum ESS 4/300, and `.optimise()` failed on a non-positive-definite
+  Hessian (from 7 bands onwards). With the error model on every band: 2/300
+  divergences, minimum ESS 32/300, NUTS and `.optimise()` agree on
+  `log_mdot` (1.62 +/- 0.05 vs 1.63). The quoted errors (0.2-0.7% of flux)
+  are consistent with within-night scatter; the extra variance is model
+  mismatch on longer timescales. See `docs/fitting_guide.md`'s
+  `fit_error_model` section. Separately, the download script used to write
+  `r_band.txt`/`R_band.txt` and `i_band.txt`/`I_band.txt`, which are one file
+  each on macOS's case-insensitive filesystem, so "13-band" fits silently
+  read R and I twice and never saw r or i. The Johnson/Cousins files are now
+  `B_johnson`/`V_johnson`/`R_cousins`/`I_cousins`, and
+  `fit_lightcurves.py` refuses two bands that resolve to the same file.
 - **Dependency versions matter more than they look like they should for
   this stack.** `jax`/`jaxlib` are pinned `>=0.4.28,<0.5` (not just
   floored) because an unconstrained range let `poetry install` resolve to

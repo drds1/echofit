@@ -62,6 +62,18 @@ UV_BAND_NAMES = {1157.5: "uv1158", 1367.0: "uv1367", 1478.5: "uv1479", 1746.0: "
 M_BH_STARKEY_STORM_VI = 10 ** 7.51  # solar masses, Pancoast et al. 2014
 M_BH_FAUSNAUGH_STORM_III = 5.0e7  # solar masses, Bentz & Katz 2015
 
+# File stems for the Johnson/Cousins filters. Plain "{name}_band.txt" would
+# give "R_band.txt"/"r_band.txt" and "I_band.txt"/"i_band.txt", which are the
+# same file on a case-insensitive filesystem (the macOS default): the second
+# write silently overwrote the first, so a "13-band" fit read R and I twice
+# each and never saw SDSS r or i at all.
+FILE_STEMS = {"B": "B_johnson", "V": "V_johnson", "R": "R_cousins", "I": "I_cousins"}
+
+
+def band_filename(name: str) -> str:
+    """The per-band file name, unique even on a case-insensitive filesystem."""
+    return f"{FILE_STEMS.get(name, name)}_band.txt"
+
 
 def _download(name: str, raw_dir: Path) -> Path:
     path = raw_dir / name
@@ -127,7 +139,7 @@ def main():
         y = np.asarray(d["y"])
         yerr = np.asarray(d["yerr"])
         order = np.argsort(t)
-        path = args.outdir / f"{name}_band.txt"
+        path = args.outdir / band_filename(name)
         np.savetxt(
             path, np.column_stack([t[order], y[order], yerr[order]]),
             header=f"t(days) y yerr -- band {name!r}, wavelength {wavelength:.1f} A "
@@ -137,7 +149,7 @@ def main():
         print(f"{name:<8}{wavelength:>16.1f}{len(t):>12}")
 
     band_args = " ".join(
-        f"--band {name} {wavelength:.1f} {args.outdir}/{name}_band.txt"
+        f"--band {name} {wavelength:.1f} {args.outdir}/{band_filename(name)}"
         for name, (wavelength, _) in sorted(bands.items(), key=lambda kv: kv[1][0])
     )
     print(f"\nWrote {len(bands)} band files to {args.outdir}/")
@@ -151,7 +163,7 @@ def main():
     )
     print(f"\nExample fit (all 13 bands, a real multi-week run):")
     print(f"  python scripts/fit_lightcurves.py --m-bh {M_BH_STARKEY_STORM_VI:.4g} {band_args} \\")
-    print(f"      --title ngc5548_storm --num-warmup 1000 --num-samples 2000 --dense-mass")
+    print(f"      --title ngc5548_storm --fit-error-model --num-warmup 1000 --num-samples 3000")
     print(f"\nFor a faster first look, try a handful of bands spanning the wavelength "
           f"range instead, e.g. --band uv1158 ... --band u ... --band g ... --band z ...")
 
