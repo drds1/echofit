@@ -85,8 +85,8 @@ like real mass does (a heavier object moves less for the same kick). This
 is the **mass matrix**, and NUTS's momentum-sampling and kinetic-energy
 term (`p^T M^-1 p / 2`) both depend on it directly.
 
-- **Diagonal mass matrix** (NumPyro's default, and `pycream2`'s until decision
-  #21; now `dense_mass=False`): one independent scale per
+- **Diagonal mass matrix** (NumPyro's default, and `pycream2`'s until
+  decision #21; now `dense_mass=False`): one independent scale per
   parameter, estimated from each parameter's own variance during warmup.
   This corrects for parameters being on very different numeric scales
   (`inclination` in tens of degrees vs. `tau_drw` in tens of days), but it

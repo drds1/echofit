@@ -35,6 +35,17 @@ jobs:
         with:
           python-version: "3.11"
 
+      # A wrapped line starting "#9)" renders as a heading here (Python-Markdown
+      # needs no space after "#") though GitHub shows it as prose. Real
+      # headings always have the space, so any other "#" at line start is a
+      # wrapping accident.
+      - name: Check for accidental headings
+        run: |
+          if grep -nE '^\s*#+[^# ]' docs/*.md; then
+            echo "::error::Line starts with '#' but isn't a heading; rewrap it."
+            exit 1
+          fi
+
       - name: Install Poetry
         run: pipx install poetry
 

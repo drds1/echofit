@@ -2,8 +2,8 @@
 
 `forward_model.thin_disk_response` is a physically-motivated alternative to
 the default skew-normal `response_function` (see the README's "Swapping the
-response function" section and `CLAUDE.md`'s design decisions #5, #8 and
-#9). This document works through exactly how it is computed, step by step,
+response function" section and `CLAUDE.md`'s design decisions #5, #8
+and #9). This document works through exactly how it is computed, step by step,
 covers the Gaussian smoothing applied on top of the exact physics and the
 trade-off that comes with it (section 5), shows the two scaling checks
 worth seeing on a chart rather than taking on faith (section 6: that
