@@ -935,7 +935,22 @@ match; `pycream2.__version__` reads the installed metadata);
       the potential fell monotonically along lines between them, and a per-parameter scan isolated
       `cos_inclination`. (Beware: `ravel_pytree` orders dict keys *sorted*, not by insertion; label
       flattened coordinates accordingly.)
-    - **The default `smoothing_frac` is now 0.1, not 0.4** (the author's decision, as decision #8's
+    - **Causal smoothing and the exact lamppost delay (`docs/cream_response_comparison.md`, a direct
+      comparison with CREAM's own `tfbx`, compiled from `cream_f90.f90` by
+      `scripts/compare_cream_response.py`).** The user noticed pycream2's responses were non-zero at
+      tau = 0 while Starkey+2016's all started at zero. Found: CREAM hard-codes `psi(1) = 0.0` (and
+      normalises to the peak); with CREAM's smoothing and delay pycream2 reproduces CREAM's shapes
+      (mean/median delays within ~4%); pycream2's Gaussian-in-tau smoothing (0.1 r_Wien ~ 0.5 d) spread
+      the near-vertical onset across tau = 0 and peaked there for inclined discs. Now: the default
+      smoothing is a 5% Gaussian in ln tau (`smoothing_log`, `DEFAULT_SMOOTHING_LOG`), causal by
+      construction (the Gaussian in tau remains via `smoothing_days`/`smoothing_frac`); and the delay
+      includes the lamppost height, tau = sqrt(r**2 + h_x**2) + h_x cos i + r sin i cos phi, whose
+      delta-function roots at fixed phi are a quadratic's (two on the near side, each weighted by
+      r/|dtau/dr|; `delay_lamppost_height=False` restores CREAM's delay). Decision #4 now holds for
+      <tau> - h_x cos i (exact), not <tau>; the shift is ~0.01 d for NGC 5548. Unsmoothed, the peak of the
+      response sits at the disc's inner edge at every wavelength, so tests use median delays, not peaks.
+      Every earlier thin-disc fit (including the NGC 5548 paper's) used the old smoothing.
+    - **The default `smoothing_frac` is now 0.1, not 0.4** (superseded by the causal default above) (the author's decision, as decision #8's
       was): 0.4 was tuned against the pre-fix, too-broad responses and now smooths over more than the
       mean delay, raising mean delays ~25% and erasing most inclination information. At 0.1 the mean
       delay drifts ~7% face-on to 80 degrees (`test_thin_disk_response_default_smoothing_...`).

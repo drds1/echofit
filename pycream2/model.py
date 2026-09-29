@@ -190,6 +190,13 @@ INCLINATION_MAX_DEG = 80.0
 # fit_temperature_slope=True). The upper bound was 1.5 until NGC 5548's
 # posterior piled up against it.
 TEMPERATURE_SLOPE_PRIOR = (0.5, 2.5)
+# Standard deviation of the Normal(0, sd) prior on log_mdot. It was 1 until
+# September 2026, when NGC 5548's thin-disc fits sat 3 and 6 prior sd into its
+# tail (log_mdot 3.1 with alpha = 3/4, 5.9 with alpha free) and the prior was
+# pulling the free-slope fit by ~0.8. At 5 it is broad on every scale seen so
+# far but still keeps the optimiser off absurd values along the flat
+# log_mdot/alpha direction.
+LOG_MDOT_PRIOR_SD = 5.0
 
 
 def drw_prior_scale(freqs: jnp.ndarray, sigma_drw, tau_drw) -> jnp.ndarray:
@@ -393,7 +400,7 @@ def reverberation_model(
 
     # -- shared physical reprocessing parameters (physical-mode bands only) --
     if any(d["lag_mode"] == "physical" for d in bands.values()):
-        log_mdot = _param("log_mdot", dist.Normal(0.0, 1.0))
+        log_mdot = _param("log_mdot", dist.Normal(0.0, LOG_MDOT_PRIOR_SD))
         if "inclination" in fixed_params:
             inclination = numpyro.deterministic(
                 "inclination", jnp.asarray(fixed_params["inclination"], dtype=jnp.float32)

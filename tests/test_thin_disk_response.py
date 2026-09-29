@@ -29,17 +29,24 @@ def test_thin_disk_response_is_causal_and_normalised():
     assert np.isclose(area, 1.0, atol=1e-2)
 
 
-def test_thin_disk_response_peak_lag_scales_with_wavelength():
-    tau_grid = jnp.linspace(-5.0, 150.0, 400)
+def test_thin_disk_response_median_lag_scales_with_wavelength():
+    """Longer wavelengths respond from further out, so the median delay grows
+    with wavelength. (This used to test the peak lag, which only moved with
+    wavelength because the old Gaussian smoothing in tau pushed the peak
+    outwards; unsmoothed, a lamppost-irradiated thin disc peaks at its inner
+    edge at every wavelength, where the zero-torque cooling and the h_x/d**3
+    dilution make the innermost ring respond most strongly.)"""
+    tau_grid = jnp.linspace(-1.0, 20.0, 4000)
+    tau_np = np.asarray(tau_grid)
 
-    def peak_lag(wavelength):
-        psi = thin_disk_response(
+    def median_lag(wavelength):
+        psi = np.asarray(thin_disk_response(
             tau_grid, log_mdot=0.0, wavelength=wavelength, inclination=20.0, M_BH=1e8
-        )
-        psi_np = np.asarray(psi)
-        return float(np.asarray(tau_grid)[np.argmax(psi_np)])
+        ))
+        cdf = np.cumsum(psi) / np.sum(psi)
+        return float(tau_np[np.searchsorted(cdf, 0.5)])
 
-    assert peak_lag(3000.0) < peak_lag(9000.0)
+    assert median_lag(3000.0) < median_lag(5000.0) < median_lag(9000.0)
 
 
 def test_thin_disk_response_has_nonzero_gradients():
@@ -92,9 +99,18 @@ def test_thin_disk_response_smoothing_days_zero_gives_exact_mean_lag_independenc
     test). Since the lamppost-dilution fix the response is compact, with a
     sharp contribution from just outside the ISCO at high inclination, so
     the grid must be fine: at 800 points the quadrature alone drifted 2%,
-    at 8000 points 0.2%."""
+    at 8000 points 0.2%.
+
+    Since the lamppost height entered the delay (tau = d + h_x cos i +
+    r sin i cos phi, September 2026), the mean delay is <d> + h_x cos i
+    exactly (the r sin i cos phi term averages to zero), so it is
+    <tau> - h_x cos i that is independent of inclination; the h_x cos i term
+    itself is only ~0.03 d here."""
     tau_grid = jnp.linspace(-1.0, 8.0, 8000)
     tau_np = np.asarray(tau_grid)
+
+    from pycream2.forward_model import _schwarzschild_radius_light_days
+    hx = 3.0 * _schwarzschild_radius_light_days(1e8)
 
     lags = []
     for inclination in [0.0, 40.0, 80.0]:
@@ -102,23 +118,22 @@ def test_thin_disk_response_smoothing_days_zero_gives_exact_mean_lag_independenc
             tau_grid, log_mdot=0.0, wavelength=4000.0, inclination=inclination,
             M_BH=1e8, smoothing_days=0.0,
         ))
-        lags.append(_np_trapz(psi * tau_np, tau_np))
+        lags.append(_np_trapz(psi * tau_np, tau_np) - hx * np.cos(np.deg2rad(inclination)))
 
     drift = abs(lags[-1] - lags[0]) / lags[0]
     assert drift < 0.01, f"expected near-exact mean-lag independence with smoothing off, got {drift:.4f} drift"
 
 
 def test_thin_disk_response_default_smoothing_mean_lag_drift_is_bounded():
-    """The default smoothing (smoothing_frac=0.1; 0.4 until September 2026,
-    see thin_disk_response's docstring) trades some of the
-    smoothing_days=0.0 exactness above for a smoother curve: causal
-    smoothing near a boundary that a high-inclination response sits much
-    closer to than a face-on one inherently breaks perfect mean-lag
-    independence. This is a deliberate trade-off (not a bug), but the drift
-    should stay in the ballpark it was chosen at (~7% face-on to 80
-    degrees) -- this catches an accidental regression to something much
-    larger, not a change in the trade-off itself."""
-    tau_grid = jnp.linspace(-1.0, 8.0, 800)
+    """The default smoothing (a 5 per cent Gaussian in ln tau since September
+    2026; before that a Gaussian in tau, smoothing_frac 0.4 then 0.1) is
+    causal, so it no longer breaks decision #4's inclination-independence of
+    the mean delay the way the Gaussian in tau did (~7-10% face-on to 80
+    degrees): <tau> - h_x cos i (see the exact test above) drifts by only
+    ~1% on this grid."""
+    from pycream2.forward_model import _schwarzschild_radius_light_days
+    hx = 3.0 * _schwarzschild_radius_light_days(1e8)
+    tau_grid = jnp.linspace(-1.0, 8.0, 4000)
     tau_np = np.asarray(tau_grid)
 
     lags = []
@@ -126,12 +141,12 @@ def test_thin_disk_response_default_smoothing_mean_lag_drift_is_bounded():
         psi = np.asarray(thin_disk_response(
             tau_grid, log_mdot=0.0, wavelength=4000.0, inclination=inclination, M_BH=1e8,
         ))
-        lags.append(_np_trapz(psi * tau_np, tau_np))
+        lags.append(_np_trapz(psi * tau_np, tau_np) - hx * np.cos(np.deg2rad(inclination)))
 
     drift = abs(lags[-1] - lags[0]) / lags[0]
-    assert 0.03 < drift < 0.2, (
-        f"expected the default smoothing's mean-lag drift to stay near the ~7% it was "
-        f"chosen at (face-on to 80 degrees), got {drift:.4f} -- see docs/thin_disk_response.md"
+    assert drift < 0.03, (
+        f"expected the causal default smoothing to keep the mean delay (less h_x cos i) "
+        f"inclination-independent to a few per cent, got {drift:.4f} -- see docs/cream_response_comparison.md"
     )
 
 
@@ -216,15 +231,18 @@ def test_thin_disk_mean_lag_obeys_the_standard_lag_temperature_relation():
     response weight: with it, the mean delay of the unsmoothed response
     satisfies <tau> = (X k lambda T_1 / hc)**(4/3) light-days with X ~ 3.2
     (responsivity-weighted, including the ISCO term) at every wavelength and
-    inclination. Without it X came out ~8, a ~3x temperature error."""
-    from pycream2.forward_model import disk_t1_kelvin
+    inclination. Without it X came out ~8, a ~3x temperature error. The
+    relation is for the delay r (1 + sin i cos phi); the exact lamppost delay
+    (September 2026) adds h_x cos i to the mean, which is subtracted here."""
+    from pycream2.forward_model import _schwarzschild_radius_light_days, disk_t1_kelvin
+    hx = 3.0 * _schwarzschild_radius_light_days(10 ** 7.5)
     tau = jnp.linspace(0.0, 40.0, 8000)
     tau_np = np.asarray(tau)
     t1 = float(disk_t1_kelvin(1.0, 10 ** 7.5))
     for wavelength in (1367.0, 9157.0):
         for inclination in (0.0, 45.0):
             psi = np.asarray(thin_disk_response(tau, 1.0, wavelength, inclination, 10 ** 7.5, smoothing_days=0.0))
-            mean = _np_trapz(psi * tau_np, tau_np) / _np_trapz(psi, tau_np)
+            mean = _np_trapz(psi * tau_np, tau_np) / _np_trapz(psi, tau_np) - hx * np.cos(np.deg2rad(inclination))
             x_eff = 1.4387773538e8 / (wavelength * t1) * mean ** 0.75
             assert 3.0 < x_eff < 3.4, (wavelength, inclination, x_eff)
 
@@ -252,3 +270,46 @@ def test_disk_temperature_profile_declines_far_from_the_isco():
     r = np.geomspace(50.0 * r_in, 50.0, 20)  # well clear of the near-ISCO peak
     T = np.asarray(disk_temperature_profile(r, log_mdot, wavelength, M_BH))
     assert np.all(np.diff(T) < 0.0)
+
+
+def test_thin_disk_response_starts_at_zero_and_smoothing_is_causal():
+    """The response is zero at zero lag and at every negative lag with the
+    default (log-normal) smoothing: before September 2026 the default was a
+    Gaussian in tau, which spread the near-vertical onset of the response
+    across tau = 0 and left psi(0) at its peak value for inclined discs (see
+    docs/cream_response_comparison.md)."""
+    tau_grid = jnp.linspace(-2.0, 20.0, 4001)
+    tau_np = np.asarray(tau_grid)
+    for inclination in (0.0, 45.0, 80.0):
+        psi = np.asarray(thin_disk_response(tau_grid, 3.0, 5000.0, inclination, 10 ** 7.5))
+        assert np.all(psi[tau_np <= 0.0] == 0.0)
+        assert abs(_np_trapz(psi, tau_np) - 1.0) < 1e-3
+        assert psi[tau_np > 0.0][0] < 1e-3 * psi.max()
+
+
+def test_thin_disk_response_no_light_before_the_lamppost_delay():
+    """With the lamppost height in the delay, nothing can respond before the
+    shortest lamppost-disc-observer path: face-on that is sqrt(r_pk**2 +
+    h_x**2) + h_x, at the temperature peak just outside the ISCO."""
+    from pycream2.forward_model import _schwarzschild_radius_light_days
+    M = 10 ** 7.5
+    rs = _schwarzschild_radius_light_days(M)
+    hx, r_pk = 3.0 * rs, 3.0 * rs * (3.5 / 3.0) ** 2
+    earliest = np.sqrt(r_pk ** 2 + hx ** 2) + hx
+    tau_grid = jnp.linspace(0.0, 2.0, 20001)
+    tau_np = np.asarray(tau_grid)
+    psi = np.asarray(thin_disk_response(tau_grid, 3.0, 5000.0, 0.0, M, smoothing_log=0.0))
+    # The inner-edge sigmoid is 0.05 r_in wide, so allow a sliver below r_pk.
+    assert np.all(psi[tau_np < 0.9 * earliest] < 1e-6 * psi.max())
+    assert psi[tau_np > 1.5 * earliest].max() > 0.0
+
+
+def test_log_smoothing_keeps_the_mean_delay():
+    """A 5 per cent Gaussian in ln tau shifts the mean delay by
+    exp(sigma**2 / 2) - 1 ~ 0.1 per cent (plus quadrature error)."""
+    tau_grid = jnp.linspace(0.0, 60.0, 12001)
+    tau_np = np.asarray(tau_grid)
+    exact = np.asarray(thin_disk_response(tau_grid, 3.0, 5000.0, 30.0, 10 ** 7.5, smoothing_log=0.0))
+    smooth = np.asarray(thin_disk_response(tau_grid, 3.0, 5000.0, 30.0, 10 ** 7.5))
+    mean = lambda psi: _np_trapz(psi * tau_np, tau_np) / _np_trapz(psi, tau_np)  # noqa: E731
+    assert abs(mean(smooth) / mean(exact) - 1.0) < 0.01

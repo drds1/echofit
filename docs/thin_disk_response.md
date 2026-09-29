@@ -1,5 +1,17 @@
 # The thin-disk accretion response function
 
+> **Update (September 2026).** Two things below describe the response as it
+> was before a direct comparison with CREAM's own Fortran response
+> ([Comparison with CREAM's response](cream_response_comparison.md)):
+>
+> - **The delay surface now includes the lamppost height** (section 3).
+> - **The default smoothing is now a causal, 5 per cent Gaussian in ln τ**
+>   rather than a Gaussian in τ (section 5), so the response is zero at zero
+>   lag.
+>
+> The sections keep their original derivations, with a note where the current
+> code differs.
+
 `forward_model.thin_disk_response` is a physically-motivated alternative to
 the default skew-normal `response_function` (see the README's "Swapping the
 response function" section and `CLAUDE.md`'s design decisions #5, #8
@@ -144,6 +156,20 @@ explicitly too ("The mean delay... is independent of inclination"). Note
 that `h_x` (the lamppost height) does *not* appear in the delay surface --
 matching eq. 5 exactly -- only in the temperature profile above.
 
+> **Update (September 2026): the delay now includes the lamppost height.**
+> Measured from the direct ray, the delay is
+> `tau = sqrt(r**2 + h_x**2) + h_x cos(inclination) + r cos(phi) sin(inclination)`.
+>
+> - Nothing responds before the shortest lamppost–disk–observer path.
+> - The mean delay is `<d> + h_x cos(inclination)` exactly, so it is
+>   `<tau> - h_x cos(inclination)` that is independent of inclination. The
+>   difference is about 0.01 days for NGC 5548.
+> - At fixed `phi` the delay is no longer linear in `r`, so section 4's single
+>   root becomes the roots of a quadratic: up to two on the near side, each
+>   weighted by `r / |dtau/dr|`.
+> - `delay_lamppost_height=False` restores eq. 5.
+
+
 This exact-independence claim is a property of the *unsmoothed* geometry
 worked through here and in section 4. Section 5's default smoothing
 loosens it to an approximate one -- see that section for exactly how much,
@@ -222,6 +248,22 @@ and isn't repeated here since the old grid implementation no longer
 exists to re-measure properly.)
 
 ## 5. Gaussian smoothing: a deliberate reintroduction
+
+> **Update (September 2026): this is no longer the default.** A Gaussian in τ
+> spreads the response's near-vertical onset across τ = 0. With the widths
+> below, it left the smoothed response at its peak value at zero lag for
+> inclined disks, and it blurred the near-peak shape that carries the
+> inclination.
+>
+> - **The default is now a local Gaussian average in ln τ**, 5 per cent wide
+>   (`smoothing_log`). It is causal by construction and shifts the mean delay
+>   by about 0.1 per cent.
+> - **The Gaussian in τ described here** is still available through
+>   `smoothing_days` or `smoothing_frac`.
+> - **Why the change:** see
+>   [Comparison with CREAM's response](cream_response_comparison.md). CREAM's
+>   own responses start at zero because `tfbx` hard-codes the first lag bin
+>   to zero, not because of its smoothing.
 
 Section 4's `psi_raw` is exact for the idealised model (a razor-thin disk
 with a well-defined temperature at every point). Plotted directly, though,
@@ -315,21 +357,28 @@ defaults change.
 
 | inclination (deg) | mean lag (days, numerically integrated) |
 |---:|---:|
-| 0  | 1.897 |
-| 20 | 1.903 |
-| 40 | 1.932 |
-| 60 | 2.007 |
-| 80 | 2.096 |
+| 0  | 0.585 |
+| 20 | 0.583 |
+| 40 | 0.577 |
+| 60 | 0.568 |
+| 80 | 0.558 |
 
-Each curve is now a single, cleanly skewed peak -- matching Starkey+2016
-Figure 3's middle panel directly, not just its "peaks at shorter lags,
-develops a tail" description -- rather than the spike-plus-kink shape
-section 5 describes for the unsmoothed version. The dashed vertical mean-
-lag lines are visibly, not just numerically, separated now: about 10.5%
-higher at 80 degrees than face-on, section 5's trade-off made visible
-rather than abstract. Pass `smoothing_days=0.0` to any of these calls to
-see the exact-independence version instead (mean lag flat to <1% out to
-80 degrees, per section 5's tests).
+*Updated September 2026, for the current response (causal smoothing and the
+lamppost height in the delay).*
+
+- **Each response starts at its lamppost-delay onset,** with no response
+  before it.
+- **The near side's contribution sharpens into a spike at high
+  inclination.** A small shoulder at 40 to 60 degrees, where the near- and
+  far-side contributions merge, is visible now that the smoothing no longer
+  hides it.
+- **The mean lags fall by 0.027 days from face-on to 80 degrees.** That is
+  the lamppost term $h_x(\cos 0 - \cos 80^\circ) = 0.029$ days for this
+  $10^8\,M_\odot$ disc, to within quadrature error, so
+  $\langle\tau\rangle - h_x\cos i$ is flat to about 0.5 per cent.
+- **The old Gaussian in τ** (section 5) raised the means to about 1.9 days
+  and made them drift about 10 per cent upwards with inclination. It was
+  also tuned for a response that lacked the lamppost dilution.
 
 ### Accretion-rate sweep (fixed face-on inclination)
 
@@ -339,17 +388,26 @@ see the exact-independence version instead (mean lag flat to <1% out to
 
 | log_mdot | mdot | mean lag (days) | `lag_scaling` reference radius (days) |
 |---:|---:|---:|---:|
-| -1.0 | 0.10 | 0.897 | 0.464 |
-| -0.5 | 0.32 | 1.303 | 0.681 |
-| +0.0 | 1.00 | 1.897 | 1.000 |
-| +0.5 | 3.16 | 2.767 | 1.468 |
-| +1.0 | 10.00 | 4.019 | 2.154 |
+| -1.0 | 0.10 | 0.302 | 0.464 |
+| -0.5 | 0.32 | 0.415 | 0.681 |
+| +0.0 | 1.00 | 0.585 | 1.000 |
+| +0.5 | 3.16 | 0.841 | 1.468 |
+| +1.0 | 10.00 | 1.223 | 2.154 |
 
-The mean lag grows monotonically with `mdot`, close to the
-`mdot**(1/3)` scaling `lag_scaling` uses (a factor of 4.48x from
-`log_mdot=-1` to `+1`, against an ideal `100**(1/3) = 4.64x` -- the small
-difference is the inner-boundary term in section 2 bending the pure power
-law, exactly as it would for a real disk). As section 2 already flags, the
+*Updated September 2026, for the current response (causal smoothing and the
+lamppost height in the delay).*
+
+The mean lag grows monotonically with `mdot`, close to the `mdot**(1/3)`
+scaling that `lag_scaling` uses. From `log_mdot=-1` to `+1` it grows by a
+factor of 4.05, against an ideal `100**(1/3) = 4.64`. The difference comes
+from the fixed-size terms: the inner-boundary term in section 2 and the
+lamppost height (about 0.035 light-days here). Both matter most for the
+smallest discs, and both bend the pure power law as they would for a real
+disk. The means are about 0.6 times `lag_scaling`'s reference radius, which
+is the lag-temperature relation with `y_eff` of about 3.2 (see
+`test_thin_disk_mean_lag_obeys_the_standard_lag_temperature_relation`).
+The old table here, with means of 1.9 times the reference radius, predated
+the lamppost-dilution fix. As section 2 already flags, the
 empirical mean lag sits above the `lag_scaling` reference radius at every
 `mdot` -- `lag_scaling` fixes the response's characteristic scale, not its
 exact mean.
@@ -460,15 +518,23 @@ side.
 
 ![thin_disk_response, fast vs exact](images/thin_disk_response_fast_vs_slow.png)
 
-Near the table's own reference point (`log_mdot=0`, `wavelength=5000`
-Angstrom), the two curves are visually indistinguishable (max absolute
-difference ~0.00001, effectively exact). Far from it (`inclination=85`
-degrees, `wavelength=7000` Angstrom, `log_mdot=-0.5`), the two are now
-close even zoomed right into the peak -- max absolute difference ~0.002,
-about 0.7% of the peak height (down from ~4% right after the analytic
-rewrite, and ~35% before it -- smoothing the correct way round, section
-5's fix above, turned out to help this case too, not just the
-near-reference one). If a fit's posterior is expected to live mostly at
+*Updated September 2026, for the current response.*
+
+- **Near the table's reference point** (`log_mdot=0`, `wavelength=5000`
+  Angstrom), the two curves are visually indistinguishable.
+- **Far from it** (`inclination=85` degrees, `wavelength=7000` Angstrom,
+  `log_mdot=-0.5`), the fast path now overshoots the exact near-side spike by
+  about 30 per cent of the peak, while the tail agrees to a few per cent. It
+  was 0.7 per cent before the causal smoothing replaced the Gaussian in τ.
+  - The old smoothing blurred the spike on both curves alike, hiding their
+    difference.
+  - Unsmoothed, the spike is shaped by fixed-size parts of the disk: the
+    inner edge and, now, the lamppost height in the delay. The stretch cannot
+    reproduce these (see above).
+  - This figure's lag grid, 0.03 days, is also coarse for a spike a few
+    hundredths of a day wide.
+
+The fast path is opt-in and used by nothing by default. If a fit's posterior is expected to live mostly at
 high inclination and/or spans multiple bands at very different
 wavelengths, building the table with `reference_wavelength` set closer to
 the run's own wavelength(s) narrows this further; using the exact

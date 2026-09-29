@@ -25,7 +25,7 @@ matplotlib.use("Agg")
 import numpy as np
 import matplotlib.pyplot as plt
 
-from pycream2.forward_model import thin_disk_response, build_thin_disk_response_fast
+from pycream2.forward_model import lag_scaling, thin_disk_response, build_thin_disk_response_fast
 
 _np_trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
@@ -50,7 +50,7 @@ def plot_inclination_sweep():
     int_0^2pi (1 + sin(i) cos(phi)) dphi = 2*pi for any inclination i, the
     cos(phi) term integrating to zero. Inclination changes the *shape*, not
     the *mean*."""
-    tau_grid = np.linspace(-2.0, 15.0, 600)
+    tau_grid = np.linspace(-2.0, 15.0, 6000)
     inclinations = [0.0, 20.0, 40.0, 60.0, 80.0]
 
     fig, ax = plt.subplots(figsize=(8, 5.5))
@@ -61,9 +61,11 @@ def plot_inclination_sweep():
             inclination=inclination, M_BH=M_BH,
         )
         mean_lag = _mean_lag(tau_grid, psi)
+        print(f"inclination {inclination:.0f}: mean lag {mean_lag:.3f} d")
         ax.plot(tau_grid, psi, color=colour, label=f"inclination={inclination:.0f} deg")
         ax.axvline(mean_lag, color=colour, linestyle="--", linewidth=1, alpha=0.8)
 
+    ax.set_xlim(-0.2, 4.0)  # the responses are compact; the grid runs further for the means
     ax.set_xlabel("lag, tau (days)")
     ax.set_ylabel("psi(tau)")
     ax.set_title(
@@ -82,7 +84,7 @@ def plot_mdot_sweep():
     should scale as mdot**(1/3) (lag_scaling's own scaling law, at fixed
     M_BH and wavelength), which is exactly what the vertical lines are
     here to make visible."""
-    tau_grid = np.linspace(-2.0, 12.0, 600)
+    tau_grid = np.linspace(-2.0, 12.0, 6000)
     log_mdots = [-1.0, -0.5, 0.0, 0.5, 1.0]
 
     fig, ax = plt.subplots(figsize=(8, 5.5))
@@ -93,6 +95,7 @@ def plot_mdot_sweep():
             inclination=0.0, M_BH=M_BH,
         )
         mean_lag = _mean_lag(tau_grid, psi)
+        print(f"log_mdot {log_mdot:+.1f}: mean lag {mean_lag:.3f} d, lag_scaling {float(lag_scaling(log_mdot, WAVELENGTH, M_BH)):.3f} d")
         mdot = 10.0 ** log_mdot
         ax.plot(tau_grid, psi, color=colour, label=f"mdot={mdot:.2f} (log_mdot={log_mdot:+.1f})")
         ax.axvline(mean_lag, color=colour, linestyle="--", linewidth=1, alpha=0.8)

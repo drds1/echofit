@@ -849,7 +849,8 @@ class EchoFit:
         polished to its own optimum (not just the best one, so a restart that
         L-BFGS merely stopped short on isn't mistaken for a different
         answer), then compared with the best. ``self.optimise_restarts`` has
-        one dict per restart: ``potential`` and ``delta_potential`` (above the
+        one dict per restart: ``start_values`` (its constrained scalar
+        parameters at the start), ``potential`` and ``delta_potential`` (above the
         best), ``max_offset_in_sd`` (the largest distance from the best
         optimum over every parameter, in Laplace posterior standard
         deviations), ``start_offset_in_sd`` (how far its starting point was
@@ -1018,6 +1019,7 @@ class EchoFit:
         for i, (start, result, p) in enumerate(zip(starts, results, polished)):
             entry = dict(
                 index=i, start_offset_in_sd=float(np.max(np.abs(start - starts[0]) / sd)),
+                start_values=scalar_values(start),
                 lbfgs_evaluations=int(result.nfev), potential=np.nan, delta_potential=np.nan,
                 max_offset_in_sd=np.nan, newton_iterations=0, agrees=False, values={},
             )

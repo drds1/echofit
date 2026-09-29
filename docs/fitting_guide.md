@@ -411,9 +411,12 @@ model.response_function = get_response("thin_disk")
 
 The thin disk follows Starkey, Horne and Villforth (2016): a real
 temperature profile and light-travel-time delay surface, rather than an
-assumed shape. It costs more per step, and the default smoothing makes the
-mean lag drift ~10% with inclination (a documented trade-off). Details and
-figures: [`thin_disk_response.md`](thin_disk_response.md).
+assumed shape. It costs more per step. Its default smoothing is causal (a 5
+per cent Gaussian in ln τ), so the response is zero at zero lag, and its delay
+includes the lamppost height, which adds h_x cos i (about 0.01 days for
+NGC 5548) to the mean delay. Details and figures:
+[`thin_disk_response.md`](thin_disk_response.md), and the comparison with
+CREAM's own response in [`cream_response_comparison.md`](cream_response_comparison.md).
 
 ---
 
