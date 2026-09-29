@@ -264,7 +264,7 @@ output grids were coarse, making `dtau` incidentally comparable to a
 significant fraction of a day; for a finer `tau_grid` (confirmed with an
 800-point grid: `dtau` ~0.01 days) it's negligible, and it ties the disk's
 own physical smoothing to an unrelated resolution choice regardless.
-`smoothing_frac` (default 0.4) instead scales the smoothing width as
+`smoothing_frac` (default 0.1; 0.4 until September 2026, see below) instead scales the smoothing width as
 `smoothing_frac * tau_ref` (`tau_ref` from `lag_scaling`), chosen by
 directly comparing rendered curves against Starkey+2016 Figure 3 (fetched
 and rendered from the actual PDF, not just read from the caption text) --
@@ -290,6 +290,13 @@ recovers section 3/4's exact behaviour, for anyone who wants that back --
 see `tests/test_thin_disk_response.py`'s
 `test_thin_disk_response_smoothing_days_zero_gives_exact_mean_lag_independence`
 and `test_thin_disk_response_default_smoothing_mean_lag_drift_is_bounded`.
+
+**Update (September 2026): the default is now `smoothing_frac=0.1`.** The 0.4 above was tuned
+against responses that lacked the lamppost's `h/x**3` dilution and were far broader than they
+should have been. On the corrected, compact responses 0.4 smooths over more than the mean delay:
+it raises mean delays ~25% and erases most of the inclination information, which the NGC 5548
+analysis measured directly. At 0.1 the mean delay drifts ~7% face-on to 80 degrees; the drift
+figures above (3%, 6%, 10%) are for the old, too-broad responses. The author chose 0.1.
 
 ## 6. Verification: the two scaling-law charts
 

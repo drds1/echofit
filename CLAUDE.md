@@ -185,7 +185,7 @@ match; `pycream2.__version__` reads the installed metadata);
    typical output grids were coarse (`dtau` incidentally ~0.3-1 day); for a
    finer `tau_grid` (confirmed with 800 points: `dtau` ~0.01 days) it's
    negligible, and ties the disk's own physical smoothing to an unrelated
-   resolution choice regardless. `smoothing_frac` (default 0.4) instead
+   resolution choice regardless. `smoothing_frac` (default 0.4 then; 0.1 since decision #22) instead
    scales the width with `tau_ref` (from `lag_scaling`), chosen by directly
    comparing rendered curves against Starkey+2016 Figure 3 -- see
    `docs/thin_disk_response.md` section 4.
@@ -883,7 +883,14 @@ match; `pycream2.__version__` reads the installed metadata);
       target is the peak of the *marginal* posterior, which is what Laplace needs; a joint peak over the
       Fourier coefficients too would be a different, biased estimator. Laplace is only as good as the
       posterior is Gaussian in unconstrained space: not for `lag_mode="free"` multimodality (rough-edges
-      note below), where `.fit()` remains the tool. `fit(init_from_optimum=True)` starts NUTS at the
+      note below), where `.fit()` remains the tool. **Multi-start reproducibility** (a direct request, as the
+      optimiser's counterpart of multi-chain MCMC checks): every restart is Newton-polished to its *own*
+      optimum, not just the lowest (otherwise a restart L-BFGS merely stopped short on looks like a
+      different answer), then compared with the best in Laplace posterior standard deviations
+      (`ef.optimise_restarts`, `optimise_timings["restarts_agreeing"]`, `RESTART_AGREEMENT_SD = 0.5`,
+      a report section and `plot_optimise_restarts`); it warns if any disagree. On pure-noise test data
+      restarts genuinely land on a second mode 15 units higher, which the old keep-the-lowest-L-BFGS
+      version could have returned. `fit(init_from_optimum=True)` starts NUTS at the
       peak (single-chain only, same R-hat reason as decision #15's `_init_strategy`); in the sampled
       model it also initialises `S_raw`/`C_raw`/`C_{band}` at their conditional mean, via
       `draw_linear=True` with `linear_eps` pinned to zero.
@@ -895,6 +902,79 @@ match; `pycream2.__version__` reads the installed metadata);
       the point there is an early, still-searching chain; `smoke_test.py`/`fit_lightcurves.py` gained
       `--diagonal-mass` (`fit_lightcurves.py --dense-mass` is kept as a no-op so old command files still
       run) and `fit_lightcurves.py --optimise` for the direct solve.
+
+22. **September 2026 physics and numerics fixes, found while writing the NGC 5548 paper (an
+    independent referee review found the first one too).** Each is covered by a test; together they
+    change every thin-disk result, so earlier NGC 5548 numbers in this file are superseded.
+
+    - **Missing lamppost dilution in `thin_disk_response`'s weight.** The weight was
+      `X**5 e**X/(e**X-1)**2` (Planck derivative times `T**-3`) without the `h_x/x**3` geometric
+      dilution of the lamppost flux (`dT/dL_x ~ h_x/(x**3 T**3)`). The outer disk responded far too
+      strongly: mean delays were ~1.9 Wien radii and the implied temperature ~3x the model's own `T_1`.
+      Fixed; the unsmoothed response now obeys `<tau> = (X k lambda T_1/hc)**(4/3)` with X ~ 3.2
+      (`test_thin_disk_mean_lag_obeys_the_standard_lag_temperature_relation`).
+    - **The temperature profile depended on the observing wavelength whenever `viscous_slope != 0.75`**
+      (it was anchored at `lag_scaling`'s `lambda**(4/3)` radius for every slope). Now
+      `T = T_1 r**-alpha (1 - sqrt(r_in/r))**(1/4)` with `T_1 = disk_t1_kelvin(log_mdot, M_BH)`
+      independent of slope and wavelength; `wien_radius()` gives the slope-aware characteristic radius.
+    - **`EchoFit(fit_temperature_slope=True)`** samples `temperature_slope` (alpha,
+      `Uniform(*model.TEMPERATURE_SLOPE_PRIOR)`, `(0.5, 2.5)`; it was `(0.5, 1.5)` until NGC 5548's
+      posterior piled up against 1.5) and passes it as `viscous_slope`, the analogue of Starkey et al.
+      (2017) Model 2. Persisted across `resume()` (tested, the recurring bug class of decisions
+      #15/#18/#19).
+    - **Three float32 overflows gave NaN gradients or Hessians**: radii clipped at 1e-12 (NaN inclination
+      gradient), `e**X/(e**X-1)**2` (now the `e**-X` form), and the fourth root of a clipped `T**4`
+      (NaN second derivative in the slope; now a double `jnp.where`).
+    - **A pole in the potential from the zero-torque edge.** Between the ISCO and the temperature peak
+      (`r_in ((4 alpha + 0.5)/(4 alpha))**2`, 1.36 r_in) T rises from zero, so every band's Wien
+      temperature is crossed in a ring ~1e-6 r_in wide next to the lamppost, where `h_x/x**3` is huge.
+      Whenever a quadrature point landed in it, psi spiked (0.03 -> 14 at one tau) and the NGC 5548
+      potential had a pole at one inclination (54.144 degrees) that trapped every optimiser restart.
+      The response mask now starts at the temperature peak instead of the ISCO (negligible emission at
+      UV-optical wavelengths for AGN temperatures). Found with the multi-start check: restarts disagreed,
+      the potential fell monotonically along lines between them, and a per-parameter scan isolated
+      `cos_inclination`. (Beware: `ravel_pytree` orders dict keys *sorted*, not by insertion; label
+      flattened coordinates accordingly.)
+    - **The default `smoothing_frac` is now 0.1, not 0.4** (the author's decision, as decision #8's
+      was): 0.4 was tuned against the pre-fix, too-broad responses and now smooths over more than the
+      mean delay, raising mean delays ~25% and erasing most inclination information. At 0.1 the mean
+      delay drifts ~7% face-on to 80 degrees (`test_thin_disk_response_default_smoothing_...`).
+    - **Filon quadrature for the transfer coefficients** (`_filon_weights`): the trapezoid rule aliased
+      at high driver frequency on the coarse tail of the graded lag grid (w = 11 rad/day against
+      0.3-day spacing on NGC 5548). Exact for the piecewise-linear psi, identical to the trapezoid as
+      `w dtau -> 0`; precomputed and on-the-fly paths share one implementation. Side effect:
+      `test_free_lag_recovery_with_driver_anchor` needed 1000 warmup steps instead of 400, because one of
+      its 4 chains otherwise stayed in a local mode ~660 units of potential worse (the aliasing had
+      happened to smooth it away); the lags themselves were recovered by every chain either way.
+    - **Data-anchored offset and gain priors** (`model._offset_prior`, `_gain_prior_loc`):
+      `C ~ Normal(mean(y), 10 std(y))`, `S ~ LogNormal(log(std(y)/sigma_drw_prior_scale), 1)`, replacing
+      `Normal(0, 5)`/`LogNormal(0, 1)` in absolute flux units (the 1158 A offset sat ~9 sigma from its
+      prior mean). The width is 10 std, not 5: at 5 NUTS diverged 1-24% on `test_rw_prior.py`.
+    - **The Laplace curvature is measured over the posterior's width, not at a point
+      (`_posterior_scale_curvature`, `CURVATURE_TOLERANCE`).** The thin-disc potential has tiny ripples in
+      inclination (~1e-4 deep in float64, ~1e-3 in float32; not quadrature error: unchanged by 4x `n_phi`
+      or 2x `n_tau`). At some optima they dominated the exact Hessian (-1.4, or -1170 with a finer
+      quadrature, where the curvature over one posterior sd was +1.0): `optimise()` then reported "one
+      more Newton step would move it 190 sd", clipped that direction to a ~1e4 sd variance, and, since
+      restart agreement is measured in those sd, reported every restart as agreeing. Each eigenvalue is now
+      checked against the finite-difference curvature one sd along its eigenvector and replaced when not
+      positive or off by more than a factor of 4 (`CURVATURE_RATIO_LIMIT`; `timings["curvature_corrections"]`
+      counts them). A first version replaced anything off by 50%, which also caught merely anharmonic
+      directions (jitters near zero), where the pointwise Hessian is the better Gaussian: NGC 5548 Model 1's
+      PSIS k-hat went from 0.49 to 0.74. The probe step
+      starts at no less than 0.05 unconstrained units and is iterated to the measured curvature's own sd:
+      a first version probed at the pointwise eigenvalue's sd, so a spurious *huge* eigenvalue shrank the
+      probe inside the very feature that caused it and gave one synthetic fit an inclination sd of 0.015
+      degrees. The check runs once per polished restart (~3 s on 13-band NGC 5548), not every Newton step.
+    - **The Laplace mode is found in unconstrained coordinates**, where a bounded uniform prior's
+      Jacobian favours the middle of its range. Where the data constrain a parameter weakly the mode is
+      pulled there (on NGC 5548-cadence synthetic data: inclination modes 39-72 degrees for a true 30,
+      alpha 0.69-1.06 for a true 0.75, mean +0.17); PSIS-reweighted draws (`ngc5548_paper/psis.py`)
+      target the exact posterior and correct it.
+    - **`optimise()` multi-start reproducibility**: every restart is polished to its own optimum
+      (damped, saddle-free Newton, Levenberg-Marquardt style) and compared with the best
+      (`ef.optimise_restarts`, `plot_optimise_restarts`, a report section). It is a check for a unique
+      optimum, not for Gaussianity; `ngc5548_paper/psis.py` shows the PSIS check for the latter.
 
 ## Known rough edges / things to check before trusting results on real data
 

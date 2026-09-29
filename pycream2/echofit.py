@@ -40,6 +40,65 @@ from . import run_manager
 _UNSET = object()
 
 
+# optimise()'s multi-start check: a restart "agrees" with the best optimum if
+# every parameter lands within this many Laplace posterior standard deviations
+# of it, i.e. well inside the posterior's own width.
+RESTART_AGREEMENT_SD = 0.5
+
+# optimise()'s Laplace curvature check: an exact Hessian eigenvalue is replaced
+# by the potential's finite-difference curvature one posterior standard
+# deviation along its eigenvector when it is not positive or differs from it by
+# more than this factor. Not tighter: a first version replaced anything off by
+# 50%, which also caught merely anharmonic directions (e.g. a jitter near
+# zero, 2-3x steeper over one sd than at the peak), where the pointwise
+# Hessian is the better Gaussian (PSIS k-hat 0.49 against 0.74 on NGC 5548).
+# The ripple artefacts this exists for are off by far more (negative, -1000,
+# 1e6 against ~1).
+CURVATURE_RATIO_LIMIT = 4.0
+
+
+def _posterior_scale_curvature(batch_potential, z, f0, eigvals, eigvecs, min_step=0.05, n_iter=3):
+    """Curvature of the potential along each Hessian eigenvector, measured over
+    one posterior standard deviation rather than infinitesimally.
+
+    The Laplace approximation needs the posterior's curvature on the scale of
+    its own width. The exact Hessian gives it at a point, which small-scale
+    structure in the potential can dominate: on NGC 5548-cadence thin-disc
+    fits, U has ripples ~1e-4 deep in inclination (and ~1e-3 in float32), which
+    gave the Hessian a negative curvature (or -1000, or +1e6) where the
+    finite-difference curvature over the posterior's width was +1.0. The
+    optimiser then reported steps of hundreds of standard deviations, and the
+    Laplace posterior came out absurdly broad or narrow in that direction.
+
+    For each eigenvector ``v`` the curvature is the central difference
+    ``c = (U(z+hv) + U(z-hv) - 2U(z)) / h**2``, with the step iterated to one
+    standard deviation of the curvature it measures, ``h = 1/sqrt(c)``,
+    starting from ``max(1/sqrt(|lam|), min_step)`` and capped at 1
+    unconstrained unit. Starting at ``min_step`` or wider means a spurious
+    spike in ``lam`` can't shrink the probe inside the feature that caused it;
+    a genuinely stiff direction just converges back down to its own width.
+    ``lam`` is replaced by ``c`` when ``c > 0`` and ``lam <= 0`` or the two
+    differ by more than a factor ``CURVATURE_RATIO_LIMIT``. Along a
+    quadratic, or merely anharmonic, direction nothing changes. Returns the corrected
+    eigenvalues and how many were replaced.
+    """
+    n = len(eigvals)
+    h = np.clip(np.maximum(1.0 / np.sqrt(np.maximum(np.abs(eigvals), 1e-12)), min_step), 1e-4, 1.0)
+    c = np.asarray(eigvals, dtype=np.float64)
+    for _ in range(n_iter):
+        points = np.concatenate([z[None] + h[:, None] * eigvecs.T, z[None] - h[:, None] * eigvecs.T])
+        u = np.asarray(batch_potential(points), dtype=np.float64)
+        c = (u[:n] + u[n:] - 2.0 * f0) / h ** 2
+        h_next = np.where(np.isfinite(c) & (c > 0), np.clip(1.0 / np.sqrt(np.maximum(c, 1e-12)), 1e-4, 1.0), h)
+        if np.allclose(h_next, h, rtol=0.1):
+            break
+        h = h_next
+    ratio = c / np.where(eigvals > 0, eigvals, np.nan)
+    off = (eigvals <= 0) | ~((ratio <= CURVATURE_RATIO_LIMIT) & (ratio >= 1.0 / CURVATURE_RATIO_LIMIT))
+    replace = np.isfinite(c) & (c > 0) & off
+    return np.where(replace, c, eigvals), int(replace.sum())
+
+
 def _merge_dicts(dicts) -> dict:
     """Concatenate (along axis 0) a list of ``{name: array}`` dicts, skipping
     any that are empty (e.g. "no prior checkpoint to merge in")."""
@@ -91,6 +150,15 @@ class EchoFit:
         docstring note. Validated against the actually-registered
         bands/driver in ``.fit()`` (a key that could never be a real site
         given the current setup raises, to catch typos).
+    fit_temperature_slope : bool, optional
+        ``False`` (default): the disk's temperature slope is fixed at
+        ``T ~ r**(-3/4)``. ``True``: infer it as ``temperature_slope``
+        (``alpha`` in ``T ~ r**(-alpha)``, prior ``Uniform(0.5, 2.5)``,
+        ``model.TEMPERATURE_SLOPE_PRIOR``), the
+        free-slope counterpart of Starkey et al. (2017)'s Model 2. Needs a
+        response function that accepts ``viscous_slope`` (e.g.
+        ``forward_model.thin_disk_response``; the default skew-normal does
+        not). Delays then scale as ``wavelength**(1/alpha)``.
 
     Examples
     --------
@@ -115,19 +183,21 @@ class EchoFit:
     def __init__(
         self, M_BH: Optional[float] = None, title: Optional[str] = None, output_dir: Optional[str] = None,
         fixed_params: Optional[Dict[str, float]] = None, drw_prior: bool = False,
-        marginalise_linear: bool = False,
+        marginalise_linear: bool = False, fit_temperature_slope: bool = False,
     ):
         self.M_BH = float(M_BH) if M_BH is not None else None
         self.title = title
         self.fixed_params: Dict[str, float] = dict(fixed_params) if fixed_params else {}
         self.drw_prior = bool(drw_prior)
         self.marginalise_linear = bool(marginalise_linear)
+        self.fit_temperature_slope = bool(fit_temperature_slope)
         self.bands: Dict[str, dict] = {}
         self.driver_data: Optional[dict] = None
         self.freqs: Optional[np.ndarray] = None
         self.tau_grid: Optional[np.ndarray] = None
         self.mcmc = None
         self.optimum: Optional[dict] = None
+        self.optimise_restarts: Optional[list] = None
         self.samples: Optional[dict] = None
         self.extra_fields: dict = {}
         self._extra_fields_by_chain: dict = {}
@@ -306,6 +376,7 @@ class EchoFit:
             drw_prior=self.drw_prior,
             transfer_mats=transfer_matrices(self.tau_grid, self.freqs),
             marginalise_linear=self.marginalise_linear,
+            fit_temperature_slope=self.fit_temperature_slope,
         )
 
     def _sigma_drw_prior_scale(self) -> float:
@@ -344,6 +415,8 @@ class EchoFit:
                 valid |= {"sigma_scale_driver", "sigma_jitter_driver"}
         if any(d["lag_mode"] == "physical" for d in self.bands.values()):
             valid |= {"log_mdot", "inclination"}
+            if self.fit_temperature_slope:
+                valid.add("temperature_slope")
         for name, d in self.bands.items():
             valid.add(f"S_{name}")
             valid.add(f"C_{name}")
@@ -428,6 +501,15 @@ class EchoFit:
                 "absolute lag origin (and hence each such band's tau) is not "
                 "identifiable without a driver light curve to anchor it."
             )
+        if self.fit_temperature_slope and has_physical:
+            import inspect
+
+            if "viscous_slope" not in inspect.signature(_model.response_function).parameters:
+                raise ValueError(
+                    "fit_temperature_slope=True needs a response function that accepts "
+                    "viscous_slope (e.g. forward_model.thin_disk_response); the active "
+                    "pycream2.model.response_function does not."
+                )
         unknown = set(self.fixed_params) - self._valid_fixed_param_names()
         if unknown:
             raise ValueError(
@@ -460,6 +542,7 @@ class EchoFit:
             M_BH=manifest["M_BH"], title=title, output_dir=output_dir,
             fixed_params=manifest.get("fixed_params"), drw_prior=manifest.get("drw_prior", False),
             marginalise_linear=manifest.get("marginalise_linear", False),
+            fit_temperature_slope=manifest.get("fit_temperature_slope", False),
         )
         ef.run_dir = run_dir
         ef._fit_config = manifest["fit_config"]
@@ -654,6 +737,7 @@ class EchoFit:
                     fixed_params=self.fixed_params,
                     drw_prior=self.drw_prior,
                     marginalise_linear=self.marginalise_linear,
+                    fit_temperature_slope=self.fit_temperature_slope,
                 ))
 
         chunk_samples_so_far, chunk_extra_so_far = [], []
@@ -710,7 +794,10 @@ class EchoFit:
 
         return self
 
-    def optimise(self, num_samples: int = 1000, num_restarts: int = 4, rng_seed: int = 0):
+    def optimise(
+        self, num_samples: int = 1000, num_restarts: int = 4, rng_seed: int = 0,
+        restart_scale: float = 0.5,
+    ):
         """Directly solve for the posterior, without MCMC: maximise the
         linear-marginalised posterior over the ~10 nonlinear parameters with
         L-BFGS, then approximate the posterior around that peak as a
@@ -738,6 +825,12 @@ class EchoFit:
         posterior (e.g. ``lag_mode="free"`` bands, CLAUDE.md's
         rough-edges note), where ``.fit()`` remains the tool. A cheap check
         is to compare against a short ``.fit(init_from_optimum=True)``.
+        The peak is found in unconstrained coordinates, where a bounded
+        uniform prior's Jacobian favours the middle of its range, so a
+        weakly constrained parameter's mode is pulled towards it; the
+        Hessian's curvature is checked over one posterior standard deviation
+        (``_posterior_scale_curvature``), since tiny ripples in the thin-disc
+        potential can dominate it at a point.
 
         Fills ``self.samples``/``self._samples_by_chain`` (one "chain" of
         ``num_samples`` Laplace draws) exactly like ``.fit()``, so every
@@ -748,19 +841,38 @@ class EchoFit:
         ``self.optimise_result`` (scipy's ``OptimizeResult``) and
         ``self.optimise_timings`` (seconds spent in L-BFGS, the Hessian and
         the posterior draws, all including one-off JIT compilation, plus
-        ``newton_offset_in_sd``, the convergence diagnostic).
+        ``newton_offset_in_sd``, the convergence diagnostic, and
+        ``restarts_agreeing``).
+
+        Multi-start reproducibility, the direct-solve counterpart of running
+        several MCMC chains from different starting points: every restart is
+        polished to its own optimum (not just the best one, so a restart that
+        L-BFGS merely stopped short on isn't mistaken for a different
+        answer), then compared with the best. ``self.optimise_restarts`` has
+        one dict per restart: ``potential`` and ``delta_potential`` (above the
+        best), ``max_offset_in_sd`` (the largest distance from the best
+        optimum over every parameter, in Laplace posterior standard
+        deviations), ``start_offset_in_sd`` (how far its starting point was
+        from the data-anchored one, on the same scale), ``agrees``
+        (``max_offset_in_sd`` below ``RESTART_AGREEMENT_SD``) and ``values``
+        (its constrained scalar parameters). It warns if any restart ends at
+        a different optimum.
 
         Parameters
         ----------
         num_samples : int
             Laplace posterior draws to generate.
         num_restarts : int
-            L-BFGS runs, from the data-anchored initial point
+            Optimisations, from the data-anchored initial point
             (``_init_strategy``) plus ``num_restarts - 1`` random
             perturbations of it; the best is kept. Guards against a local
-            optimum at negligible cost.
+            optimum, and measures reproducibility (above).
         rng_seed : int
             Seeds the restart perturbations and the Laplace/linear draws.
+        restart_scale : float
+            Standard deviation of the restart perturbations, in NumPyro's
+            unconstrained space. Raise it (e.g. 2.0) for a stricter
+            reproducibility test from more widely spread starting points.
         """
         from jax.flatten_util import ravel_pytree
         from numpyro.infer.util import constrain_fn, initialize_model
@@ -786,51 +898,98 @@ class EchoFit:
         timings = {}
         t0 = time.perf_counter()
         rng = np.random.default_rng(rng_seed)
-        starts = [np.asarray(z0)] + [np.asarray(z0) + 0.5 * rng.normal(size=z0.shape) for _ in range(num_restarts - 1)]
+        starts = [np.asarray(z0)] + [np.asarray(z0) + restart_scale * rng.normal(size=z0.shape) for _ in range(num_restarts - 1)]
         # Tolerances matched to a float32 objective: the default ftol (~2e-9
         # relative) is below float32's own resolution (~1e-7), so L-BFGS's line
         # search otherwise "fails" right at the optimum it has already found.
         options = dict(ftol=1e-7, gtol=1e-3, maxiter=1000)
         results = [minimize(objective, x, jac=True, method="L-BFGS-B", options=options) for x in starts]
-        best = min((r for r in results if np.isfinite(r.fun)), key=lambda r: r.fun)
         timings["lbfgs_seconds"] = time.perf_counter() - t0
         timings["lbfgs_evaluations_total"] = int(sum(r.nfev for r in results))
         # Newton polishing with the exact Hessian. L-BFGS alone can stop well
         # short of the peak along the prior-dominated driver-amplitude/band-gain
         # ridge (CLAUDE.md decision #13): on NGC 5548 it stopped 6.5 units of
         # potential above it, with the implied Newton step 3.5 posterior standard
-        # deviations long. Each step is backtracked until the potential falls
-        # and only ever accepted if it does, so polishing can't make things
-        # worse; it stops once the implied step is under 0.01 standard
+        # deviations long. Each step is damped until the potential falls and
+        # only ever accepted if it does (see polish), so polishing can't make
+        # things worse; it stops once the implied step is under 0.01 standard
         # deviations. Convergence is judged on that posterior scale rather than
         # by L-BFGS's own flag, whose line search on a float32 objective often
-        # ends "abnormally" right at the optimum.
+        # ends "abnormally" right at the optimum. Every restart is polished, not
+        # just the lowest, so the restarts can be compared at their true optima
+        # and the best is chosen after polishing.
         t0 = time.perf_counter()
         hessian_fn = jax.jit(jax.hessian(potential))
+        batch_potential_jit = jax.jit(jax.vmap(potential))
+        corrections = {}
 
-        def curvature(z):
+        def batch_potential(points):
+            return batch_potential_jit(jnp.asarray(points, dtype=z0.dtype))
+
+        def curvature(z, posterior_scale=False):
+            # posterior_scale: check each eigenvalue over one posterior sd
+            # (_posterior_scale_curvature); ~2 potential evaluations per
+            # parameter, so only at each polished optimum, not every Newton step.
             h = np.asarray(hessian_fn(jnp.asarray(z, dtype=z0.dtype)), dtype=np.float64)
             vals, vecs = np.linalg.eigh(0.5 * (h + h.T))
-            return vals, (vecs / np.clip(vals, 1e-8, None)) @ vecs.T
+            if posterior_scale:
+                f0 = float(batch_potential(np.asarray(z)[None])[0])
+                vals, corrections["n"] = _posterior_scale_curvature(batch_potential, np.asarray(z), f0, vals, vecs)
+            return vals, vecs
 
-        z_best, f_best = np.asarray(best.x, dtype=np.float64), float(best.fun)
-        eigvals, cov = curvature(z_best)
-        n_newton = 0
-        for _ in range(20):
-            step = cov @ objective(z_best)[1]
-            offset_in_sd = float(np.max(np.abs(step) / np.sqrt(np.diag(cov))))
-            if offset_in_sd < 0.01:
-                break
-            alpha = 1.0
-            while alpha > 1e-3 and not objective(z_best - alpha * step)[0] < f_best:
-                alpha *= 0.5
-            f_new = objective(z_best - alpha * step)[0]
-            if not f_new < f_best:
-                break
-            z_best, f_best = z_best - alpha * step, f_new
-            eigvals, cov = curvature(z_best)
-            n_newton += 1
-        best.x, best.fun = z_best, f_best
+        def laplace_cov(vals, vecs):
+            return (vecs / np.clip(vals, 1e-8, None)) @ vecs.T
+
+        def polish(result):
+            # Damped, saddle-free Newton: step = (|H| + damping I)^-1 grad, in
+            # H's eigenbasis, with the damping raised until the step lowers the
+            # potential and relaxed after each success (Levenberg-Marquardt
+            # style). A plain Newton step with a backtracking line search stalled
+            # on the curved inclination/log_mdot ridge of the NGC 5548 thin-disc
+            # fit: tiny or negative eigenvalues there make the undamped step
+            # enormous, every backtracked fraction of it still went uphill, and
+            # restarts stopped 4-110 sd short of the optimum along the ridge.
+            z, f = np.asarray(result.x, dtype=np.float64), float(result.fun)
+            if not np.isfinite(f):
+                return None
+            vals, vecs = curvature(z)
+            n_newton, offset_in_sd, damping = 0, np.inf, 0.0
+            for _ in range(20):
+                grad = objective(z)[1]
+                cov = laplace_cov(vals, vecs)
+                offset_in_sd = float(np.max(np.abs(cov @ grad) / np.sqrt(np.diag(cov))))
+                if offset_in_sd < 0.01:
+                    break
+                grad_eig = vecs.T @ grad
+                floor = 1e-6 * float(np.max(np.abs(vals)))
+                for _ in range(15):
+                    step = vecs @ (grad_eig / (np.abs(vals) + damping))
+                    f_new = objective(z - step)[0]
+                    if f_new < f:
+                        break
+                    damping = max(10.0 * damping, floor)
+                else:
+                    break
+                z, f = z - step, f_new
+                damping /= 10.0
+                vals, vecs = curvature(z)
+                n_newton += 1
+            # Judge convergence on the posterior-scale curvature: tiny ripples in
+            # the potential can make the pointwise Hessian claim a huge remaining
+            # step where the peak has in fact been reached.
+            vals, vecs = curvature(z, posterior_scale=True)
+            cov = laplace_cov(vals, vecs)
+            offset_in_sd = float(np.max(np.abs(cov @ objective(z)[1]) / np.sqrt(np.diag(cov))))
+            return dict(z=z, f=f, eigvals=vals, cov=cov, n_newton=n_newton, offset_in_sd=offset_in_sd,
+                        curvature_corrections=corrections["n"])
+
+        polished = [polish(r) for r in results]
+        best_index = min((i for i, p in enumerate(polished) if p is not None), key=lambda i: polished[i]["f"])
+        best, peak = results[best_index], polished[best_index]
+        eigvals, cov = peak["eigvals"], peak["cov"]
+        timings["curvature_corrections"] = peak["curvature_corrections"]
+        n_newton, offset_in_sd = peak["n_newton"], peak["offset_in_sd"]
+        best.x, best.fun = peak["z"], peak["f"]
         timings["hessian_and_newton_seconds"] = time.perf_counter() - t0
         timings["newton_iterations"] = n_newton
         timings["newton_offset_in_sd"] = offset_in_sd
@@ -847,6 +1006,41 @@ class EchoFit:
                 "with suspicion and cross-check with .fit()."
             )
         z_hat = jnp.asarray(best.x, dtype=z0.dtype)
+
+        def scalar_values(z):
+            values = constrain_fn(
+                reverberation_model, (), kwargs, unravel(jnp.asarray(z, dtype=z0.dtype)), return_deterministic=True,
+            )
+            return {k: float(v) for k, v in values.items() if np.size(v) == 1 and not k.startswith("y_pred_")}
+
+        sd = np.sqrt(np.diag(cov))
+        self.optimise_restarts = []
+        for i, (start, result, p) in enumerate(zip(starts, results, polished)):
+            entry = dict(
+                index=i, start_offset_in_sd=float(np.max(np.abs(start - starts[0]) / sd)),
+                lbfgs_evaluations=int(result.nfev), potential=np.nan, delta_potential=np.nan,
+                max_offset_in_sd=np.nan, newton_iterations=0, agrees=False, values={},
+            )
+            if p is not None:
+                offset = float(np.max(np.abs(p["z"] - peak["z"]) / sd))
+                entry.update(
+                    potential=p["f"], delta_potential=p["f"] - peak["f"], max_offset_in_sd=offset,
+                    newton_iterations=p["n_newton"], agrees=offset < RESTART_AGREEMENT_SD,
+                    values=scalar_values(p["z"]),
+                )
+            self.optimise_restarts.append(entry)
+        n_agree = sum(r["agrees"] for r in self.optimise_restarts)
+        timings["restarts_agreeing"] = n_agree
+        if n_agree < num_restarts:
+            worst = [r for r in self.optimise_restarts if not r["agrees"]]
+            warnings.warn(
+                f"optimise(): only {n_agree} of {num_restarts} restarts reached the same optimum; "
+                + ", ".join(
+                    f"restart {r['index']} ended {r['max_offset_in_sd']:.2g} sd away, "
+                    f"{r['delta_potential']:.3g} above it in potential" for r in worst
+                )
+                + ". The best is kept; a multimodal posterior needs .fit() with several chains."
+            )
 
         t0 = time.perf_counter()
         z_draws = rng.multivariate_normal(best.x, cov, size=num_samples).astype(np.asarray(z0).dtype)
@@ -1058,6 +1252,16 @@ class EchoFit:
             self._extra_fields_by_chain["potential_energy"], checkpoint_every=checkpoint_every, **kwargs
         )
 
+    def plot_optimise_restarts(self, param_names=None, **kwargs):
+        """Multi-start reproducibility of :meth:`optimise` -- see
+        :func:`plotting.plot_optimise_restarts`."""
+        if not self.optimise_restarts:
+            raise RuntimeError("plot_optimise_restarts: call .optimise() first.")
+        return plotting.plot_optimise_restarts(
+            self.optimise_restarts, self.samples, param_names=param_names,
+            agreement_sd=RESTART_AGREEMENT_SD, **kwargs,
+        )
+
     def plot_lightcurve_fits(
         self, n_fine: int = 200, n_pred_samples: int = 200, extrapolate_days: float = 30.0, **kwargs
     ):
@@ -1096,17 +1300,21 @@ class EchoFit:
         if has_physical:
             log_mdot = jnp.asarray(self.samples["log_mdot"])[idx]
             inclination = jnp.asarray(self.samples["inclination"])[idx]
+            # A fixed slope (the default) is simply not passed, as in the model.
+            slope = (jnp.asarray(self.samples["temperature_slope"])[idx]
+                     if "temperature_slope" in self.samples else jnp.full(len(idx), jnp.nan))
 
-        def physical_draw(S_s, C_s, log_mdot_s, incl_s, wavelength, S_band_s, C_band_s):
+        def physical_draw(S_s, C_s, log_mdot_s, incl_s, slope_s, wavelength, S_band_s, C_band_s):
             # Read via the model module's attribute, not a direct import of our
             # own, so that swapping model.response_function (see CLAUDE.md's
             # "swappable by contract" design decision) is reflected here too --
             # a direct `from .forward_model import response_function` would
             # bind an independent copy that a swap on model.py wouldn't reach,
             # leaving the fit and this plot inconsistent with each other.
+            slope_kwargs = {"viscous_slope": slope_s} if "temperature_slope" in self.samples else {}
             psi = _model.response_function(
                 self.tau_grid, log_mdot=log_mdot_s, wavelength=wavelength,
-                inclination=incl_s, M_BH=self.M_BH,
+                inclination=incl_s, M_BH=self.M_BH, **slope_kwargs,
             )
             A, B = transfer_coeffs(self.tau_grid, psi, self.freqs)
             echo = compute_echo(S_s, C_s, self.freqs, A, B, t_fine)
@@ -1126,8 +1334,8 @@ class EchoFit:
             C_band = jnp.asarray(self.samples[f"C_{name}"])[idx]
             if d["lag_mode"] == "physical":
                 y_pred, psi = jax.vmap(
-                    physical_draw, in_axes=(0, 0, 0, 0, None, 0, 0)
-                )(S, C, log_mdot, inclination, d["wavelength"], S_band, C_band)
+                    physical_draw, in_axes=(0, 0, 0, 0, 0, None, 0, 0)
+                )(S, C, log_mdot, inclination, slope, d["wavelength"], S_band, C_band)
             else:
                 tau = jnp.asarray(self.samples[f"tau_{name}"])[idx]
                 y_pred, psi = jax.vmap(

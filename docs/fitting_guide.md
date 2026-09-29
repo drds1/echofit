@@ -150,6 +150,20 @@ for a Gaussian posterior and good near one. It fails when:
   standard deviations. It reports the final figure as
   `ef.optimise_timings["newton_offset_in_sd"]` and warns above 0.25.
 
+**Checking reproducibility: multi-start.** Every restart (`num_restarts`,
+default 4) is polished to its own optimum and compared with the best, the
+direct-solve counterpart of running several MCMC chains from different
+starting points. `ef.optimise_restarts` lists each restart's distance from
+the best (in posterior standard deviations) and how far above it sits in
+potential; `optimise_timings["restarts_agreeing"]` counts those within 0.5
+standard deviations, and the report shows a table and plot
+(`ef.plot_optimise_restarts()`). It warns when any restart disagrees. Use
+`restart_scale=1.0` (default 0.5) for starts spread more widely. On all 13
+NGC 5548 bands with the thin-disk response, 8 restarts started up to 56
+standard deviations apart all finished within 0.06 of the best; with the
+skew-normal response only 3 of 8 agreed, exposing a flat inclination
+direction that a single Laplace solve reports far too narrowly.
+
 In those cases, run `.fit()`. `.fit(init_from_optimum=True)` starts NUTS at
 `.optimise()`'s peak (single chain only, since identical starts would
 defeat multi-chain convergence checks). It should shorten the warmup

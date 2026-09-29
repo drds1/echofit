@@ -125,6 +125,14 @@ def generate_report(
         fig_free_lag.savefig(paths["corner_free_lag"], dpi=150, bbox_inches="tight")
         figs_to_close.append(fig_free_lag)
 
+    # Only after EchoFit.optimise(); a later .fit() on the same object leaves
+    # optimise_restarts set, so also require that no sampler has run since.
+    if getattr(ef, "optimise_restarts", None) and not ef.extra_fields:
+        fig_restarts, _ = ef.plot_optimise_restarts()
+        paths["restarts"] = out_dir / "optimise_restarts.png"
+        fig_restarts.savefig(paths["restarts"], dpi=150, bbox_inches="tight")
+        figs_to_close.append(fig_restarts)
+
     fig_fourier = ef.plot_fourier_correlation()[0]
     paths["fourier_correlation"] = out_dir / "fourier_correlation.png"
     fig_fourier.savefig(paths["fourier_correlation"], dpi=150, bbox_inches="tight")
@@ -244,6 +252,34 @@ structure would be worth a closer look.</p>
 """)
     corner_section = "".join(corner_sections)
 
+    restarts_section = ""
+    if "restarts" in paths:
+        rows = []
+        for r in ef.optimise_restarts:
+            v = r["values"]
+            cells = [
+                str(r["index"]), f"{r['start_offset_in_sd']:.3g}", str(r["lbfgs_evaluations"]),
+                str(r["newton_iterations"]), f"{2.0 * r['delta_potential']:.3g}",
+                f"{r['max_offset_in_sd']:.3g}", "yes" if r["agrees"] else "<b>no</b>",
+            ] + [f"{v[p]:.4g}" if p in v else "&mdash;" for p in ("log_mdot", "inclination")]
+            rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+        n_agree = sum(r["agrees"] for r in ef.optimise_restarts)
+        restarts_section = f"""
+<h2>Direct-solve reproducibility (multi-start)</h2>
+<p>The optimiser's counterpart of running several MCMC chains from different
+starting points: optimise() ran {len(ef.optimise_restarts)} times, from the
+data-anchored starting point and from random perturbations of it, and polished
+each to its own optimum. <b>{n_agree} of {len(ef.optimise_restarts)} agree</b>
+with the best, meaning every parameter lies within 0.5 Laplace posterior
+standard deviations of it. "Start offset" is how far each start was from the
+first, on the same scale; "&Delta;BOF" is how far above the best each optimum
+sits in Badness of Fit (2 &times; potential).</p>
+<table><tr><th>restart</th><th>start offset (sd)</th><th>L-BFGS evaluations</th>
+<th>Newton steps</th><th>&Delta;BOF</th><th>max offset from best (sd)</th>
+<th>agrees</th><th>log_mdot</th><th>inclination</th></tr>{"".join(rows)}</table>
+<img src="{data_uris['restarts']}" alt="{paths['restarts'].name}">
+"""
+
     bof_section = ""
     if "bof" in paths:
         bof_section = f"""
@@ -271,7 +307,7 @@ code {{ background: #f2f2f2; padding: 1px 4px; }}
 
 <h2>Posterior summary</h2>
 {_summary_table_html(ef, truth)}
-
+{restarts_section}
 <h2>Raw light curves</h2>
 <img src="{data_uris['raw']}" alt="{paths['raw'].name}">
 

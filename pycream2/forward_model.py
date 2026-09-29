@@ -240,33 +240,59 @@ def _schwarzschild_radius_light_days(M_BH):
     return 2.0 * r_g_m / _LIGHT_DAY_M
 
 
-def _viscous_t4_shape(r_safe, tau_ref, r_in, viscous_slope):
-    """Shakura-Sunyaev viscous ``T**4(r)``, shape-only (normalised to 1 at
-    ``r = tau_ref``, the Wien radius) -- the one formula shared by
-    :func:`disk_temperature_profile` and :func:`thin_disk_response`'s
-    viscous term, so it exists in exactly one place.
+def disk_t1_kelvin(log_mdot, M_BH):
+    """Temperature (Kelvin) of the disk's power law at one light-day, ``T_1``,
+    for a given ``log_mdot``.
 
-    Takes ``tau_ref``/``r_in`` as plain values (not ``log_mdot``/
-    ``wavelength``/``M_BH``) since both callers already compute those for
-    other reasons of their own; takes ``r_safe`` already clipped by the
-    caller rather than clipping internally, since the two callers need
-    genuinely different clipping strategies at ``r <= r_in`` --
-    ``thin_disk_response`` needs a smooth, differentiable-in-inclination
-    cutoff (its ``r_star`` depends on a sampled parameter, handled via a
-    separate sigmoid mask applied to its result) where a hard clip would
-    reintroduce the zero-gradient trap documented on that mask;
-    :func:`disk_temperature_profile` doesn't sample ``r``, so a plain hard
-    clip at ``r_in`` is fine and simpler there.
+    ``lag_scaling`` puts the radius where the disk temperature equals the
+    Wien temperature ``b / wavelength`` at ``tau_ref(wavelength)``, which
+    scales as ``wavelength**(4/3)``; for ``T = T_1 r**(-3/4)`` that makes
+    ``T_1 = (b / wavelength) * tau_ref**(3/4)`` the same at every wavelength.
+    This is the one place ``log_mdot`` becomes a temperature, so every
+    temperature slope (``viscous_slope``) shares the same ``T_1`` for the
+    same ``log_mdot``.
     """
-    visc_inner_term = (1.0 - jnp.sqrt(r_in / r_safe)) / jnp.clip(
-        1.0 - jnp.sqrt(r_in / tau_ref), 1e-6, None
-    )
-    return (tau_ref / r_safe) ** (4.0 * viscous_slope) * visc_inner_term
+    tau_ref = lag_scaling(log_mdot, LAMBDA_PIVOT, M_BH)
+    return _WIEN_B_ANGSTROM_KELVIN / LAMBDA_PIVOT * tau_ref ** 0.75
+
+
+def wien_radius(log_mdot, wavelength, M_BH, viscous_slope=0.75):
+    """Radius (light-days) where ``T_1 r**(-viscous_slope)`` equals the Wien
+    temperature ``b / wavelength``: ``lag_scaling``'s ``tau_ref`` exactly at
+    the standard slope 0.75, and scaling as ``wavelength**(1/viscous_slope)``
+    in general."""
+    return (disk_t1_kelvin(log_mdot, M_BH) * wavelength / _WIEN_B_ANGSTROM_KELVIN) ** (1.0 / viscous_slope)
+
+
+def _viscous_t4_shape(r_safe, r_in, viscous_slope):
+    """Viscous-disk ``T**4(r) / T_1**4``: the power law ``r**(-4 slope)``
+    (``r`` in light-days) times the zero-torque inner-boundary factor
+    ``1 - sqrt(r_in / r)``. The one formula shared by
+    :func:`disk_temperature_profile` and :func:`thin_disk_response`'s viscous
+    term, so it exists in exactly one place.
+
+    Takes ``r_safe`` already clipped by the caller rather than clipping
+    internally, since the two callers need genuinely different clipping
+    strategies at ``r <= r_in`` -- ``thin_disk_response`` needs a smooth,
+    differentiable-in-inclination cutoff (its ``r_star`` depends on a sampled
+    parameter, handled via a separate sigmoid mask applied to its result)
+    where a hard clip would reintroduce the zero-gradient trap documented on
+    that mask; :func:`disk_temperature_profile` doesn't sample ``r``, so a
+    plain hard clip at ``r_in`` is fine and simpler there.
+
+    Before September 2026 this was normalised at ``lag_scaling``'s
+    ``tau_ref(wavelength)`` for every slope, which for any slope other than
+    0.75 made the disk's temperature at a fixed radius depend on the
+    observing wavelength.
+    """
+    return r_safe ** (-4.0 * viscous_slope) * (1.0 - jnp.sqrt(r_in / r_safe))
 
 
 def disk_temperature_profile(r, log_mdot, wavelength, M_BH, viscous_slope: float = 0.75):
     """Axisymmetric Shakura-Sunyaev viscous disk temperature (Kelvin) as a
-    function of radius ``r`` (light-days).
+    function of radius ``r`` (light-days):
+    ``T**4 = T_1**4 r**(-4 viscous_slope) (1 - sqrt(r_in / r))``, with
+    ``T_1`` from :func:`disk_t1_kelvin`.
 
     Shares its actual formula with ``thin_disk_response``'s viscous term
     via :func:`_viscous_t4_shape` (only the clipping-at-the-ISCO and
@@ -287,17 +313,17 @@ def disk_temperature_profile(r, log_mdot, wavelength, M_BH, viscous_slope: float
         Radius (light-days), any shape. Clipped at the ISCO (3
         Schwarzschild radii) from below -- there's no disk material inside
         it, so no temperature to report.
-    log_mdot, wavelength, M_BH, viscous_slope
-        As in ``thin_disk_response``: ``log_mdot``/``wavelength``/``M_BH``
-        set the absolute temperature scale via ``lag_scaling``'s Wien-radius
-        anchor (``T(tau_ref) = b / wavelength`` exactly, Wien's law).
+    log_mdot, M_BH, viscous_slope
+        As in ``thin_disk_response``.
+    wavelength : float
+        Kept for backward compatibility; the profile no longer depends on it
+        (the disk's temperature is a property of the disk, not of the band
+        it's observed in).
     """
-    tau_ref = lag_scaling(log_mdot, wavelength, M_BH)
     r_in = 3.0 * _schwarzschild_radius_light_days(M_BH)
     r_safe = jnp.clip(r, r_in, None)
-    t4_shape = _viscous_t4_shape(r_safe, tau_ref, r_in, viscous_slope)
-    t_ref_kelvin = _WIEN_B_ANGSTROM_KELVIN / wavelength
-    return t_ref_kelvin * jnp.clip(t4_shape, 1e-12, None) ** 0.25
+    t4_shape = _viscous_t4_shape(r_safe, r_in, viscous_slope)
+    return disk_t1_kelvin(log_mdot, M_BH) * jnp.clip(t4_shape, 1e-30, None) ** 0.25
 
 
 def thin_disk_response(
@@ -312,7 +338,7 @@ def thin_disk_response(
     irradiation_weight: float = 0.5,
     lamppost_height_rs: float = 3.0,
     n_phi: int = 200,
-    smoothing_frac: float = 0.4,
+    smoothing_frac: float = 0.1,
     smoothing_days: float | None = None,
 ):
     """Causal, area-normalised transfer function from thin-disk reprocessing
@@ -339,11 +365,18 @@ def thin_disk_response(
       what gives the response a genuine, inclination-driven skew and a hard
       causal edge at tau=0, rather than :func:`response_function`'s ad-hoc
       skew-normal shape.
-    * A response weight equal to the Planck-function derivative with
-      respect to temperature, ``X**5 * e**X / (e**X - 1)**2`` with
-      ``X = hc / (k * lambda * T(r))``, i.e. how strongly a patch of disk
-      at temperature ``T(r)`` responds, in the observing band, to a small
-      heating perturbation.
+    * A response weight ``dB_lambda/dT * dT/dL_x``: the Planck-function
+      derivative, ``dB/dT ~ X**2 * e**X / (e**X - 1)**2`` with
+      ``X = hc / (k * lambda * T(r))``, times the temperature change a small
+      change in the lamppost luminosity causes. The lamppost deposits
+      ``d(T**4) ~ dL_x * h_x / x**3`` per unit area (``x = sqrt(r**2 +
+      h_x**2)``, Starkey+2016 eq. 2's irradiation term), so
+      ``dT/dL_x ~ h_x / (x**3 T**3)``, and the full weight is
+      ``X**5 * e**X / (e**X - 1)**2 * h_x / x**3``. The ``h_x / x**3``
+      dilution was missing before September 2026: without it the outer
+      disk responded far too strongly, mean delays came out ~1.9 times the
+      Wien radius, and the temperature implied by a fit's delays was ~3 times
+      the model's own ``T_1``.
 
     The analytic reduction: the full disk integral is
     ``psi_raw(tau) = int_0^{2pi} int weight(r) delta(tau - tau(r,phi)) r dr dphi``.
@@ -405,15 +438,17 @@ def thin_disk_response(
     to look like a separate feature (a "shoulder") rather than the single,
     smoothly-varying skewed peak the smoothed Starkey+2016 Figure 3 shows.
 
-    Absolute normalisation: rather than independently deriving a physical
-    Eddington-ratio-to-accretion-rate conversion (which would give
+    Absolute normalisation: the temperature profile is
+    ``T**4 = T_1**4 r**(-4 viscous_slope) (1 - sqrt(r_in / r))`` (``r`` in
+    light-days), with ``T_1`` from :func:`disk_t1_kelvin`, which takes it
+    from :func:`lag_scaling`'s Wien radius rather than an independently
+    derived Eddington-ratio-to-accretion-rate conversion (which would give
     ``log_mdot`` a second, incompatible meaning depending which response
-    function a band uses), the characteristic (Wien-law) radius is taken
-    directly from :func:`lag_scaling` -- so switching a band between
-    ``response_function`` and this function preserves what ``log_mdot``
-    means. Only the disk's *inner* edge (the ISCO) and the lamppost height
-    use real physical constants (G, c, M_sun), since that conversion needs
-    no separate accretion-rate calibration.
+    function a band uses). ``T_1`` does not depend on ``viscous_slope``, so
+    ``(log_mdot, viscous_slope)`` map one-to-one onto Starkey et al. (2017)'s
+    ``(T_1, alpha)``. Only the disk's *inner* edge (the ISCO) and the
+    lamppost height use real physical constants (G, c, M_sun), since that
+    conversion needs no separate accretion-rate calibration.
 
     Parameters
     ----------
@@ -422,10 +457,12 @@ def thin_disk_response(
         Same meaning and units as in :func:`response_function`.
     M_BH : float
         Fixed black hole mass (solar masses).
-    viscous_slope : float
-        Temperature-radius power-law index (0.75 = standard thin-disk;
-        matches the exponent implicit in ``lag_scaling``'s
-        ``wavelength**(4/3)``). Fixed, not inferred.
+    viscous_slope : float or array_like
+        Temperature-radius power-law index ``alpha`` in ``T ~ r**(-alpha)``
+        (0.75 = standard thin disk, matching ``lag_scaling``'s
+        ``wavelength**(4/3)``). Can be a sampled parameter
+        (``EchoFit(fit_temperature_slope=True)``); delays then scale as
+        ``wavelength**(1/alpha)``.
     include_irradiation : bool
         If True, mix in the lamppost-irradiation temperature component
         (``irradiation_slope``/``lamppost_height_rs``, weighted by
@@ -454,9 +491,9 @@ def thin_disk_response(
         histogram.
     smoothing_frac : float
         Sets the default Gaussian smoothing width (see ``smoothing_days``
-        below) as ``smoothing_frac * tau_ref`` (``tau_ref`` from
-        :func:`lag_scaling`), rather than the Fortran's literal ``sig_gaus
-        = dtau`` (tied to the output tau grid's own bin spacing). That
+        below) as ``smoothing_frac * r_wien`` (:func:`wien_radius`, equal to
+        :func:`lag_scaling`'s ``tau_ref`` at the standard slope), rather
+        than the Fortran's literal ``sig_gaus = dtau`` (tied to the output tau grid's own bin spacing). That
         literal convention only smooths meaningfully when ``dtau`` happens
         to be a decent fraction of a day, true in the Fortran's typical
         (coarse) runs but not for a finer ``tau_grid`` (confirmed directly:
@@ -464,12 +501,13 @@ def thin_disk_response(
         smoothing) -- and ties the disk's own physical smoothing to an
         unrelated resolution choice regardless. Scaling with ``tau_ref``
         instead adapts automatically to whatever ``M_BH``/``log_mdot``/
-        ``wavelength`` a fit actually uses. ``0.4`` was chosen by comparing
-        rendered curves directly against Starkey+2016 Figure 3 (see
-        ``docs/thin_disk_response.md`` section 4) -- smaller values leave a
-        visible kink at high inclination where the near-side and main-body
-        contributions haven't fully merged; larger values start smoothing
-        away genuine inclination-driven skew differences between bands.
+        ``wavelength`` a fit actually uses. The default, ``0.1``, replaced
+        ``0.4`` (chosen by eye against Starkey+2016 Figure 3 before the
+        lamppost-dilution fix, when the responses were far broader) in
+        September 2026: on the corrected, compact responses ``0.4`` smooths
+        over more than the mean delay, raising mean delays ~25% and erasing
+        most of the inclination information. At ``0.1`` the mean delay
+        drifts ~7% face-on to 80 degrees (``0.0``: none).
     smoothing_days : float, optional
         Overrides ``smoothing_frac * tau_ref`` with an explicit Gaussian
         smoothing width (days), if you want the width fixed rather than
@@ -487,7 +525,7 @@ def thin_disk_response(
     psi : array_like, shape (n_tau,)
         Normalised response evaluated at ``tau_grid``, zero for tau < 0.
     """
-    tau_ref = lag_scaling(log_mdot, wavelength, M_BH)
+    r_wien = wien_radius(log_mdot, wavelength, M_BH, viscous_slope)
     rs = _schwarzschild_radius_light_days(M_BH)
     r_in = 3.0 * rs
     hx = lamppost_height_rs * rs
@@ -499,38 +537,61 @@ def thin_disk_response(
 
     tau_pos = jnp.clip(tau_grid, 0.0, None)
     r_star = tau_pos[:, None] / denom[None, :]  # (n_tau, n_phi)
-    r_star_safe = jnp.clip(r_star, 1e-12, None)
+    # Evaluate the temperature no further in than the ISCO, where r**-3 and
+    # the inner-boundary factor are finite; the sigmoid mask below switches
+    # the region inside the temperature peak off. Clamping at ~0 instead overflowed float32 there, and
+    # the overflow times the clamp's zero gradient made every inclination
+    # gradient NaN.
+    r_star_safe = jnp.where(r_star > r_in, r_star, r_in)
 
-    # T**4(r), shape-only (normalised to 1 at r = tau_ref, the Wien radius) --
-    # shared with disk_temperature_profile, see _viscous_t4_shape.
-    t4_visc = _viscous_t4_shape(r_star_safe, tau_ref, r_in, viscous_slope)
+    # T**4(r) / T_1**4 -- shared with disk_temperature_profile, see
+    # _viscous_t4_shape.
+    t4_visc = _viscous_t4_shape(r_star_safe, r_in, viscous_slope)
+    x_star = jnp.sqrt(r_star_safe ** 2 + hx ** 2)
     if include_irradiation:
-        x_star = jnp.sqrt(r_star_safe ** 2 + hx ** 2)
-        x_ref = jnp.sqrt(tau_ref ** 2 + hx ** 2)
-        t4_irad = (hx / x_star ** 3) / (hx / x_ref ** 3)
+        # Irradiation's share of T**4 is irradiation_weight at the Wien radius.
+        x_ref = jnp.sqrt(r_wien ** 2 + hx ** 2)
+        t4_irad = (x_ref / x_star) ** 3 * _viscous_t4_shape(r_wien, r_in, viscous_slope)
         t4_shape = irradiation_weight * t4_irad + (1.0 - irradiation_weight) * t4_visc
     else:
         t4_shape = t4_visc
 
-    # Absolute temperature via Wien's law: T(tau_ref) satisfies
-    # lambda * T = b exactly, tying the disk's temperature scale to the
-    # observing band without any extra free calibration constant.
-    t_ref_kelvin = _WIEN_B_ANGSTROM_KELVIN / wavelength
-    T = t_ref_kelvin * jnp.clip(t4_shape, 1e-12, None) ** 0.25
-    X = jnp.clip(_HC_OVER_K_ANGSTROM / (wavelength * T), None, 50.0)
-    eX = jnp.exp(X)
-    planck_deriv = X ** 5 * eX / (eX - 1.0) ** 2  # (n_tau, n_phi)
+    # Only take the fourth root where the disk is actually warm (the double
+    # jnp.where keeps every derivative finite): clipping T**4 at a tiny floor
+    # and rooting it overflowed float32 in the second derivative with respect
+    # to viscous_slope (x**0.25's curvature at 1e-30), and the clip's zero
+    # gradient times that overflow made the Hessian NaN. Cold points get
+    # X = 50, i.e. no response.
+    warm = t4_shape > 1e-20
+    T = disk_t1_kelvin(log_mdot, M_BH) * jnp.where(warm, t4_shape, 1.0) ** 0.25
+    X = jnp.where(warm, jnp.clip(_HC_OVER_K_ANGSTROM / (wavelength * T), None, 50.0), 50.0)
+    emX = jnp.exp(-X)
+    # dB/dT * dT/dL_x: X**2 e**X/(e**X-1)**2 from the Planck derivative, X**3
+    # (i.e. T**-3) and h_x/x**3 from d(T**4) ~ dL_x h_x/x**3. Written as
+    # (r_wien/x)**3, the same up to a constant, to keep float32 well scaled.
+    planck_deriv = X ** 5 * emX / (1.0 - emX) ** 2  # (n_tau, n_phi); e^-X form cannot overflow
+    dilution = (r_wien / x_star) ** 3
 
-    # No disk material inside the ISCO -- a smooth (not hard) cutoff, since
-    # r_star depends on inclination, a sampled parameter, and a hard
-    # jnp.where here would have the same zero-gradient risk documented for
-    # tophat_response_free/CLAUDE.md decision #7.
-    mask = jax.nn.sigmoid((r_star - r_in) / jnp.clip(0.1 * r_in, 1e-6, None))
+    # Only the disk outside its temperature peak responds: a smooth (not hard)
+    # cutoff, since r_star depends on inclination, a sampled parameter, and a
+    # hard jnp.where here would have the same zero-gradient risk documented
+    # for tophat_response_free/CLAUDE.md decision #7. Between the ISCO and the
+    # peak, r_pk = r_in ((4 slope + 0.5) / (4 slope))**2 (1.36 r_in for the
+    # standard slope), the zero-torque temperature rises from zero, so every
+    # band's Wien temperature is crossed in an extremely thin ring (~1e-6 r_in
+    # wide in the optical) right next to the lamppost, where the dilution
+    # h_x/x**3 is huge. Its true contribution is negligible, but whenever a
+    # (tau, phi) quadrature point landed inside it psi spiked (0.03 -> 14 at one
+    # tau), the smoothing spread the spike over the whole response, and the
+    # NGC 5548 potential had a pole at one inclination (54.144 degrees) that
+    # trapped the optimiser. Before September 2026 the cutoff was at r_in.
+    r_peak = r_in * ((4.0 * viscous_slope + 0.5) / (4.0 * viscous_slope)) ** 2
+    mask = jax.nn.sigmoid((r_star - r_peak) / jnp.clip(0.05 * r_in, 1e-6, None))
 
-    raw = tau_pos * jnp.sum(planck_deriv * mask / denom[None, :] ** 2, axis=1) * dphi
+    raw = tau_pos * jnp.sum(planck_deriv * dilution * mask / denom[None, :] ** 2, axis=1) * dphi
     raw = jnp.where(tau_grid >= 0.0, raw, 0.0)
 
-    sigma = smoothing_frac * tau_ref if smoothing_days is None else smoothing_days
+    sigma = smoothing_frac * r_wien if smoothing_days is None else smoothing_days
     raw = jax.lax.cond(
         sigma > 0.0,
         lambda raw: _gaussian_smooth(raw, tau_grid, sigma),
@@ -666,7 +727,7 @@ def build_thin_disk_response_table(
 
 def thin_disk_response_from_table(
     table: ThinDiskResponseTable, tau_grid, log_mdot, wavelength, inclination,
-    smoothing_frac: float = 0.4, smoothing_days: float | None = None,
+    smoothing_frac: float = 0.1, smoothing_days: float | None = None,
 ):
     """Fast, interpolated stand-in for :func:`thin_disk_response`, using a
     precomputed :class:`ThinDiskResponseTable` (see
@@ -728,7 +789,7 @@ def thin_disk_response_from_table(
 
 
 def build_thin_disk_response_fast(
-    M_BH, smoothing_frac: float = 0.4, smoothing_days: float | None = None, **table_kwargs,
+    M_BH, smoothing_frac: float = 0.1, smoothing_days: float | None = None, **table_kwargs,
 ) -> Callable:
     """Build and return a ready-to-use, interpolation-based response
     function matching the standard ``(tau_grid, log_mdot, wavelength,
@@ -764,8 +825,56 @@ def build_thin_disk_response_fast(
     return _response
 
 
+def _filon_weights(tau_grid, freqs, xp):
+    """Weights ``(Wc, Ws)``, shape ``(n_freq, n_tau)``, such that
+    ``Wc @ psi`` and ``Ws @ psi`` are the exact cosine and sine transforms of
+    the piecewise-linear interpolant of ``psi`` on ``tau_grid`` (Filon-type
+    quadrature). Written for either NumPy or ``jax.numpy`` (``xp``).
+
+    Plain trapezoid weights ``cos(w tau_j) * dtau_j`` alias badly once
+    ``w * dtau`` is not small: on NGC 5548 the driver reached w = 11 rad/day
+    while the graded lag grid's tail spacing was 0.3 day (3.3 radians per
+    step), so the high-frequency transfer coefficients were mostly aliasing
+    noise that jumped as the parameters reshaped psi. The optimiser stalled
+    on the resulting jagged potential (restarts stopped along the
+    inclination ridge with gradients ~100x the optimum's), and NUTS would
+    see the same roughness. Integrating each segment's linear hat functions
+    against ``e^{i w tau}`` exactly removes the aliasing for any ``w``; for
+    ``w * dtau -> 0`` it reduces to the trapezoid rule.
+
+    Per segment ``[a, b]``, ``h = b - a``, ``theta = w h``, with
+    ``g0 = int_0^1 e^{i theta s} ds`` and ``g1 = int_0^1 s e^{i theta s} ds``:
+    the left node gets ``h e^{i w a} (g0 - g1)`` and the right node
+    ``h e^{i w a} g1``; real parts weight the cosine transform and imaginary
+    parts the sine transform. Below ``theta = 0.05`` a Taylor series replaces
+    the closed forms, which cancel badly there.
+    """
+    a = tau_grid[:-1][None, :]
+    h = (tau_grid[1:] - tau_grid[:-1])[None, :]
+    w = freqs[:, None]
+    theta = w * h
+    small = theta < 0.05
+    ts = xp.where(small, 1.0, theta)  # safe denominator for the unused branch
+    sin_t, cos_t = xp.sin(ts), xp.cos(ts)
+    g0r = xp.where(small, 1.0 - theta ** 2 / 6.0 + theta ** 4 / 120.0, sin_t / ts)
+    g0i = xp.where(small, theta / 2.0 - theta ** 3 / 24.0, (1.0 - cos_t) / ts)
+    g1r = xp.where(small, 0.5 - theta ** 2 / 8.0 + theta ** 4 / 144.0, sin_t / ts + (cos_t - 1.0) / ts ** 2)
+    g1i = xp.where(small, theta / 3.0 - theta ** 3 / 30.0, -cos_t / ts + sin_t / ts ** 2)
+    pr, pi = xp.cos(w * a), xp.sin(w * a)  # e^{i w a}
+
+    def times_phase(gr, gi):
+        return h * (pr * gr - pi * gi), h * (pr * gi + pi * gr)
+
+    left_c, left_s = times_phase(g0r - g1r, g0i - g1i)
+    right_c, right_s = times_phase(g1r, g1i)
+    zeros = xp.zeros((freqs.shape[0], 1), dtype=left_c.dtype)
+    Wc = xp.concatenate([left_c, zeros], axis=1) + xp.concatenate([zeros, right_c], axis=1)
+    Ws = xp.concatenate([left_s, zeros], axis=1) + xp.concatenate([zeros, right_s], axis=1)
+    return Wc, Ws
+
+
 def transfer_matrices(tau_grid, freqs):
-    """Precompute the fixed, trapezoid-weighted cosine/sine matrices that
+    """Precompute the fixed quadrature-weighted cosine/sine matrices that
     turn :func:`transfer_coeffs` into two matrix-vector products.
 
     ``tau_grid`` and ``freqs`` are both fixed for the whole fit (built once
@@ -799,20 +908,12 @@ def transfer_matrices(tau_grid, freqs):
     -------
     Wc, Ws : jnp.ndarray, shape (n_freq, n_tau)
         ``A = Wc @ psi`` and ``B = Ws @ psi`` reproduce
-        :func:`transfer_coeffs`'s trapezoidal integrals exactly.
+        :func:`transfer_coeffs`'s integrals (Filon quadrature, see
+        :func:`_filon_weights`).
     """
-    tau = np.asarray(tau_grid, dtype=np.float64)
-    w = np.asarray(freqs, dtype=np.float64)
-    dtau = np.diff(tau)
-    weights = np.zeros_like(tau)
-    weights[:-1] += 0.5 * dtau
-    weights[1:] += 0.5 * dtau
-    phase = w[:, None] * tau[None, :]
+    Wc, Ws = _filon_weights(np.asarray(tau_grid, dtype=np.float64), np.asarray(freqs, dtype=np.float64), np)
     dtype = jnp.asarray(tau_grid).dtype
-    return (
-        jnp.asarray(np.cos(phase) * weights, dtype=dtype),
-        jnp.asarray(np.sin(phase) * weights, dtype=dtype),
-    )
+    return jnp.asarray(Wc, dtype=dtype), jnp.asarray(Ws, dtype=dtype)
 
 
 def fourier_basis(freqs, t):
@@ -837,6 +938,10 @@ def transfer_coeffs(tau_grid, psi, freqs, matrices=None):
     A_k = int psi(tau) cos(w_k tau) dtau
     B_k = int psi(tau) sin(w_k tau) dtau
 
+    Integrated exactly for the piecewise-linear interpolant of psi (Filon
+    quadrature, :func:`_filon_weights`), so high frequencies don't alias on a
+    coarse lag grid.
+
     Parameters
     ----------
     tau_grid : array_like, shape (n_tau,)
@@ -852,15 +957,10 @@ def transfer_coeffs(tau_grid, psi, freqs, matrices=None):
     -------
     A, B : array_like, shape (n_freq,)
     """
-    if matrices is not None:
-        Wc, Ws = matrices
-        return Wc @ psi, Ws @ psi
-    # outer product: (n_freq, n_tau)
-    phase = freqs[:, None] * tau_grid[None, :]
-    trapz = jnp.trapezoid if hasattr(jnp, "trapezoid") else jnp.trapz
-    A = trapz(psi[None, :] * jnp.cos(phase), tau_grid, axis=-1)
-    B = trapz(psi[None, :] * jnp.sin(phase), tau_grid, axis=-1)
-    return A, B
+    if matrices is None:
+        matrices = _filon_weights(jnp.asarray(tau_grid), jnp.asarray(freqs), jnp)
+    Wc, Ws = matrices
+    return Wc @ psi, Ws @ psi
 
 
 def compute_echo(S, C, freqs, A, B, t_obs, basis=None):

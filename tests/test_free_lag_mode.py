@@ -98,10 +98,15 @@ def test_free_lag_recovery_with_driver_anchor():
     # wider, weaker Uniform(0, tau_max) prior on each tau_{band} than intended.
     ef.build_grid(n_freq=15, n_tau=150, tau_max=60.0)
 
+    # 1000 warmup steps, not 400: with the Filon transfer coefficients
+    # (forward_model._filon_weights, CLAUDE.md decision #22) one of the 4
+    # chains stayed in a local mode ~660 units of potential worse, every lag
+    # shifted ~+0.1 d, after 400; the trapezoid rule's high-frequency aliasing
+    # had happened to smooth that trap away. With 1000 all 4 agree.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         ef.fit(
-            rng_seed=0, num_warmup=400, num_samples=400,
+            rng_seed=0, num_warmup=1000, num_samples=400,
             num_chains=4, chain_method="vectorized", progress_bar=False,
         )
 

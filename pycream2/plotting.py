@@ -775,3 +775,55 @@ def plot_bof(potential_energy: np.ndarray, checkpoint_every: Optional[int] = Non
     ax.set_title("Badness of Fit vs. sample")
     fig.tight_layout()
     return fig, ax
+
+
+def plot_optimise_restarts(
+    restarts: Sequence[dict], samples: Dict[str, np.ndarray], param_names: Optional[Sequence[str]] = None,
+    agreement_sd: float = 0.5, figsize=None,
+):
+    """Multi-start reproducibility of ``EchoFit.optimise()``: the direct-solve
+    counterpart of overlaying several MCMC chains. The left panel shows how
+    far above the best optimum each restart's own (Newton-polished) optimum
+    sits in Badness of Fit (2 x potential); each other panel shows one
+    parameter's Laplace posterior (histogram) with a line at every restart's
+    optimum. Restarts that agree (every parameter within ``agreement_sd``
+    posterior standard deviations of the best) are blue, others red.
+
+    Parameters
+    ----------
+    restarts : list of dict
+        ``ef.optimise_restarts``.
+    samples : dict
+        ``ef.samples`` (the Laplace posterior draws).
+    param_names : sequence of str, optional
+        Parameters to show; defaults to whichever of ``log_mdot``,
+        ``inclination`` and ``sigma_drw`` exist.
+    """
+    if param_names is None:
+        param_names = [p for p in ("log_mdot", "inclination", "sigma_drw") if p in samples]
+    n = 1 + len(param_names)
+    fig, axes = plt.subplots(1, n, figsize=figsize or (3.4 * n, 3.2))
+    axes = np.atleast_1d(axes)
+    colours = ["tab:blue" if r["agrees"] else "tab:red" for r in restarts]
+
+    ax = axes[0]
+    idx = [r["index"] for r in restarts]
+    dbof = [2.0 * r["delta_potential"] for r in restarts]
+    ax.bar(idx, np.nan_to_num(dbof, nan=0.0), color=colours)
+    ax.set_xlabel("restart")
+    ax.set_ylabel(r"$\Delta$BOF above best optimum")
+    ax.set_xticks(idx)
+    ax.grid(alpha=0.6, axis="y")
+
+    for ax, name in zip(axes[1:], param_names):
+        ax.hist(np.asarray(samples[name]), bins=40, color="0.8", density=True)
+        for r, c in zip(restarts, colours):
+            if name in r["values"]:
+                ax.axvline(r["values"][name], color=c, lw=1.2, alpha=0.8)
+        ax.set_xlabel(name)
+        ax.set_yticks([])
+        ax.grid(alpha=0.6)
+    n_agree = sum(r["agrees"] for r in restarts)
+    fig.suptitle(f"{n_agree} of {len(restarts)} restarts agree (within {agreement_sd:g} posterior sd)")
+    fig.tight_layout()
+    return fig, axes

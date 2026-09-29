@@ -186,6 +186,10 @@ import numpyro.distributions as dist
 from .forward_model import response_function, tophat_response_free, transfer_coeffs, compute_echo, driver_at
 
 INCLINATION_MAX_DEG = 80.0
+# Uniform prior bounds on the free temperature slope alpha (T ~ r**-alpha,
+# fit_temperature_slope=True). The upper bound was 1.5 until NGC 5548's
+# posterior piled up against it.
+TEMPERATURE_SLOPE_PRIOR = (0.5, 2.5)
 
 
 def drw_prior_scale(freqs: jnp.ndarray, sigma_drw, tau_drw) -> jnp.ndarray:
@@ -249,6 +253,7 @@ def reverberation_model(
     transfer_mats: Optional[tuple] = None,
     marginalise_linear: bool = False,
     draw_linear: bool = False,
+    fit_temperature_slope: bool = False,
 ):
     """NumPyro model for multi-band reverberation-mapped light curves.
 
@@ -312,6 +317,10 @@ def reverberation_model(
         sampling them -- see the module docstring's "linear-parameter
         marginalisation" note. Only the nonlinear parameters remain NUTS
         sample sites; the likelihood becomes a single ``numpyro.factor``.
+    fit_temperature_slope : bool
+        Infer the disk temperature slope as ``temperature_slope``
+        (``Uniform(0.5, 1.5)``) and pass it to ``response_function`` as
+        ``viscous_slope`` (see ``EchoFit(fit_temperature_slope=...)``).
     draw_linear : bool
         Only with ``marginalise_linear``, and only for post-processing (via
         ``numpyro.infer.Predictive`` with the nonlinear posterior samples
@@ -358,10 +367,11 @@ def reverberation_model(
 
     # -- driver light curve: a direct, zero-lag anchor on X(t) itself ----
     if driver is not None:
-        S_driver = _param("S_driver", dist.LogNormal(0.0, 1.0))
+        S_driver = _param("S_driver", dist.LogNormal(_gain_prior_loc(driver["y"], sigma_drw_prior_scale), 1.0))
         offset_is_linear = marginalise_linear and "C_driver" not in fixed_params
+        offset_loc, offset_sd = _offset_prior(driver["y"])
         if not offset_is_linear:
-            C_driver = _param("C_driver", dist.Normal(0.0, 5.0))
+            C_driver = _param("C_driver", dist.Normal(offset_loc, offset_sd))
         if not marginalise_linear:
             y_pred_driver = S_driver * driver_at(S, C, freqs, driver["t"], basis=driver.get("basis")) + C_driver
             numpyro.deterministic("y_pred_driver", y_pred_driver)
@@ -376,6 +386,7 @@ def reverberation_model(
             blocks.append(dict(
                 name="driver", y=driver["y"], sigma=sigma_eff_driver, gain=S_driver,
                 S_cols=sin_wt, C_cols=cos_wt, known_offset=None if offset_is_linear else C_driver,
+                offset_loc=offset_loc, offset_sd=offset_sd,
             ))
         else:
             numpyro.sample("obs_driver", dist.Normal(y_pred_driver, sigma_eff_driver), obs=driver["y"])
@@ -394,6 +405,12 @@ def reverberation_model(
             cos_incl_min = jnp.cos(jnp.deg2rad(INCLINATION_MAX_DEG))
             cos_inclination = numpyro.sample("cos_inclination", dist.Uniform(cos_incl_min, 1.0))
             inclination = numpyro.deterministic("inclination", jnp.rad2deg(jnp.arccos(cos_inclination)))
+        # Free temperature slope alpha (T ~ r**-alpha), Starkey et al. (2017)'s
+        # Model 2; only passed to the response when requested, so responses
+        # without a viscous_slope argument (the skew-normal) are unaffected.
+        slope_kwargs = {}
+        if fit_temperature_slope:
+            slope_kwargs["viscous_slope"] = _param("temperature_slope", dist.Uniform(*TEMPERATURE_SLOPE_PRIOR))
 
     # tau_grid[-1], not float(...): under NUTS's internal while_loop tracing
     # tau_grid can be an abstract tracer, and dist.Uniform accepts a JAX
@@ -402,10 +419,11 @@ def reverberation_model(
 
     # -- per-band amplitude / offset + likelihood ------------------------
     for band_name, d in bands.items():
-        S_band = _param(f"S_{band_name}", dist.LogNormal(0.0, 1.0))
+        S_band = _param(f"S_{band_name}", dist.LogNormal(_gain_prior_loc(d["y"], sigma_drw_prior_scale), 1.0))
         offset_is_linear = marginalise_linear and f"C_{band_name}" not in fixed_params
+        offset_loc, offset_sd = _offset_prior(d["y"])
         if not offset_is_linear:
-            C_band = _param(f"C_{band_name}", dist.Normal(0.0, 5.0))
+            C_band = _param(f"C_{band_name}", dist.Normal(offset_loc, offset_sd))
 
         if d["lag_mode"] == "physical":
             psi = response_function(
@@ -414,6 +432,7 @@ def reverberation_model(
                 wavelength=d["wavelength"],
                 inclination=inclination,
                 M_BH=M_BH,
+                **slope_kwargs,
             )
         else:
             tau_band = _param(f"tau_{band_name}", dist.Uniform(0.0, tau_max))
@@ -440,6 +459,7 @@ def reverberation_model(
                 name=band_name, y=d["y"], sigma=sigma_eff, gain=S_band,
                 S_cols=sin_wt * A - cos_wt * B, C_cols=sin_wt * B + cos_wt * A,
                 known_offset=None if offset_is_linear else C_band,
+                offset_loc=offset_loc, offset_sd=offset_sd,
             ))
         else:
             numpyro.sample(
@@ -452,7 +472,31 @@ def reverberation_model(
         _linear_marginal(blocks, prior_scale, draw_linear)
 
 
-_OFFSET_PRIOR_SD = 5.0  # C_{band}/C_driver ~ Normal(0, 5), as in the sampled path
+# Offset and gain priors are anchored to each light curve's own data, so they
+# mean the same thing in any flux units: C ~ Normal(mean(y), 10 std(y)), and
+# S ~ LogNormal(log(std(y) / sigma_drw_prior_scale), 1), i.e. centred on the
+# gain that maps a driver of the anchored amplitude onto the band's own
+# variability (the idea behind EchoFit._init_strategy and decision #13).
+# Before September 2026 they were Normal(0, 5) and LogNormal(0, 1) in absolute
+# units: on NGC 5548 the 1158 A offset sat ~9 sigma from its prior mean and the
+# z-band gain ~4 sigma below its prior median, a real pull on the fit. The
+# width is 10 std(y), not 5: an offset is strongly correlated with the
+# driver's slowest Fourier terms, and at 5 std(y) that direction was tight
+# enough to make NUTS diverge (tests/test_rw_prior.py: 1-24% divergent over
+# four seeds, against 0.4-3% at 10 std(y) and 0.2-4% with the old prior).
+_OFFSET_PRIOR_WIDTH = 10.0
+
+
+def _offset_prior(y):
+    """(loc, sd) of a light curve's offset prior: its own mean, and
+    ``_OFFSET_PRIOR_WIDTH`` times its own standard deviation."""
+    return jnp.mean(y), _OFFSET_PRIOR_WIDTH * jnp.std(y)
+
+
+def _gain_prior_loc(y, sigma_drw_prior_scale):
+    """Log-median of a light curve's gain prior: its own standard deviation
+    relative to the driver-amplitude prior scale."""
+    return jnp.log(jnp.std(y) / sigma_drw_prior_scale)
 
 
 def _basis(freqs, t):
@@ -469,7 +513,8 @@ def _linear_marginal(blocks, prior_scale, draw_linear):
 
     Linear parameters, in the prior-whitened basis (unit-Normal prior):
     ``S_raw`` (n_freq), ``C_raw`` (n_freq), then one offset per block whose
-    ``known_offset`` is ``None`` (scaled by ``_OFFSET_PRIOR_SD``).
+    ``known_offset`` is ``None`` (``offset = offset_loc + offset_sd * theta``,
+    so the prior-mean offset is subtracted from that block's data first).
     """
     n_freq = prior_scale.shape[0]
     offset_names = [b["name"] for b in blocks if b["known_offset"] is None]
@@ -480,8 +525,8 @@ def _linear_marginal(blocks, prior_scale, draw_linear):
         n = b["y"].shape[0]
         onehot = jnp.zeros((n_off,))
         if b["known_offset"] is None:
-            onehot = onehot.at[offset_names.index(b["name"])].set(_OFFSET_PRIOR_SD)
-            ys.append(b["y"])
+            onehot = onehot.at[offset_names.index(b["name"])].set(b["offset_sd"])
+            ys.append(b["y"] - b["offset_loc"])
         else:
             ys.append(b["y"] - b["known_offset"])
         rows.append(jnp.concatenate([
@@ -519,8 +564,10 @@ def _linear_marginal(blocks, prior_scale, draw_linear):
     C_raw = numpyro.deterministic("C_raw", theta[n_freq:2 * n_freq])
     numpyro.deterministic("S", S_raw * prior_scale)
     numpyro.deterministic("C", C_raw * prior_scale)
+    blocks_by_name = {b["name"]: b for b in blocks}
     for i, name in enumerate(offset_names):
-        numpyro.deterministic(f"C_{name}", theta[2 * n_freq + i] * _OFFSET_PRIOR_SD)
+        b = blocks_by_name[name]
+        numpyro.deterministic(f"C_{name}", b["offset_loc"] + theta[2 * n_freq + i] * b["offset_sd"])
     for b, row in zip(blocks, rows):
-        known = 0.0 if b["known_offset"] is None else b["known_offset"]
+        known = b["offset_loc"] if b["known_offset"] is None else b["known_offset"]
         numpyro.deterministic(f"y_pred_{b['name']}", row @ theta + known)

@@ -11,7 +11,8 @@ import pytest
 from numpyro import handlers
 from scipy.stats import multivariate_normal
 
-from pycream2.echofit import EchoFit
+from pycream2.echofit import EchoFit, _posterior_scale_curvature
+import pycream2.model as model_module
 from pycream2.model import reverberation_model
 from pycream2.synthetic import generate_synthetic_dataset
 
@@ -63,11 +64,14 @@ def _brute_force_marginal(kwargs, fixed_params):
             sigmas.append(jnp.broadcast_to(tr["obs_driver"]["fn"].scale, tr["obs_driver"]["value"].shape))
         return jnp.concatenate(preds), jnp.concatenate(sigmas)
 
-    zeros = (jnp.zeros(n_freq), jnp.zeros(n_freq), jnp.zeros(len(names)))
-    mean, sigma = predictions(*zeros)
-    J = jax.jacobian(lambda *a: predictions(*a)[0], argnums=(0, 1, 2))(*zeros)
+    # Offset priors are data-anchored: Normal(mean(y), (width * std(y))**2) per light curve.
+    ys = {n: np.asarray(kwargs["bands"][n]["y"] if n in kwargs["bands"] else kwargs["driver"]["y"]) for n in names}
+    locs = jnp.asarray([ys[n].mean() for n in names])
+    prior_mean = (jnp.zeros(n_freq), jnp.zeros(n_freq), locs)
+    mean, sigma = predictions(*prior_mean)
+    J = jax.jacobian(lambda *a: predictions(*a)[0], argnums=(0, 1, 2))(*prior_mean)
     J = np.concatenate([np.asarray(j, dtype=np.float64) for j in J], axis=1)
-    prior_var = np.concatenate([np.ones(2 * n_freq), np.full(len(names), 25.0)])
+    prior_var = np.concatenate([np.ones(2 * n_freq), [(model_module._OFFSET_PRIOR_WIDTH * ys[n].std()) ** 2 for n in names]])
     cov = np.diag(np.asarray(sigma, dtype=np.float64) ** 2) + (J * prior_var) @ J.T
     y = np.concatenate([np.asarray(d["y"]) for d in kwargs["bands"].values()]
                        + ([np.asarray(kwargs["driver"]["y"])] if kwargs["driver"] else []))
@@ -155,6 +159,74 @@ def test_in_memory_marginalised_fit_fills_linear_sites_per_chain():
     assert ef.samples["C_g"].shape == (12,)
 
 
+def test_laplace_curvature_ignores_a_tiny_ripple_in_the_potential():
+    # U = x**2/2 + y**2 + 1e-4 sin(200 x): at x0 = pi/400 the ripple's
+    # curvature (-4) dominates the Hessian's x entry (1 - 4 = -3), yet over the
+    # posterior's own width (one sd, ~1) U is the unit-curvature quadratic. The
+    # stiff, clean y direction (curvature 2) must be left alone.
+    def u(p):
+        p = np.atleast_2d(p)
+        return 0.5 * p[:, 0] ** 2 + p[:, 1] ** 2 + 1e-4 * np.sin(200 * p[:, 0])
+
+    z = np.array([np.pi / 400, 0.0])
+    vals, vecs = np.array([-3.0, 2.0]), np.eye(2)
+    corrected, n = _posterior_scale_curvature(u, z, float(u(z)[0]), vals, vecs)
+    assert n == 1
+    np.testing.assert_allclose(corrected, [1.0, 2.0], atol=5e-3)
+    # A spuriously *huge* pointwise curvature (a sharp feature) must not shrink
+    # the probe inside the feature and confirm itself.
+    corrected, n = _posterior_scale_curvature(u, z, float(u(z)[0]), np.array([1e6, 2.0]), vecs)
+    assert n == 1
+    np.testing.assert_allclose(corrected, [1.0, 2.0], atol=5e-3)
+
+
+def test_laplace_curvature_keeps_a_genuinely_stiff_direction():
+    # Curvature 1e4 (sd 0.01, well below the 0.05 minimum starting step): the
+    # probe starts wide, converges to the true width and leaves it unchanged.
+    def u(p):
+        p = np.atleast_2d(p)
+        return 0.5e4 * p[:, 0] ** 2 + 0.5 * p[:, 1] ** 2
+
+    z = np.zeros(2)
+    corrected, n = _posterior_scale_curvature(u, z, 0.0, np.array([1e4, 1.0]), np.eye(2))
+    assert n == 0
+    np.testing.assert_allclose(corrected, [1e4, 1.0])
+
+
+def test_laplace_curvature_keeps_a_merely_anharmonic_direction():
+    # U = x**2/2 + x**4/5: curvature 1 at the peak, about 1.4 over one sd (the
+    # central difference at h ~ 1 picks up the quartic). That is anharmonicity,
+    # not an artefact, and the pointwise value is kept.
+    def u(p):
+        p = np.atleast_2d(p)
+        return 0.5 * p[:, 0] ** 2 + 0.2 * p[:, 0] ** 4 + 0.5 * p[:, 1] ** 2
+
+    corrected, n = _posterior_scale_curvature(u, np.zeros(2), 0.0, np.array([1.0, 1.0]), np.eye(2))
+    assert n == 0
+    np.testing.assert_allclose(corrected, [1.0, 1.0])
+
+
+def test_optimise_restarts_are_polished_and_compared():
+    """optimise()'s multi-start bookkeeping: every restart is polished to its
+    own optimum and measured against the best. The "data" here are pure noise,
+    whose posterior is genuinely multimodal (two of these restarts share a
+    second mode 15 units above the best), so agreement is tested on real
+    synthetic light curves in test_optimise_laplace_matches_nuts instead."""
+    ef = _small_echofit()
+    with pytest.warns(UserWarning, match="restarts reached the same optimum"):
+        ef.optimise(num_samples=50, num_restarts=3, restart_scale=1.0)
+    restarts = ef.optimise_restarts
+    assert len(restarts) == 3
+    assert min(r["delta_potential"] for r in restarts) == 0.0
+    assert all(r["delta_potential"] >= 0.0 for r in restarts)
+    assert restarts[0]["start_offset_in_sd"] == 0.0
+    assert all(r["start_offset_in_sd"] > 0.0 for r in restarts[1:])
+    assert ef.optimise_timings["restarts_agreeing"] == sum(r["agrees"] for r in restarts) < 3
+    assert all(r["agrees"] for r in restarts if r["delta_potential"] == 0.0)
+    assert {"log_mdot", "inclination"} <= set(restarts[0]["values"])
+    assert ef.plot_optimise_restarts() is not None
+
+
 def test_optimise_fills_samples_and_can_seed_nuts(tmp_path):
     """EchoFit.optimise(): the direct (no-MCMC) solve fills everything the
     plots read, and fit(init_from_optimum=True) can start NUTS at its peak,
@@ -172,6 +244,7 @@ def test_optimise_fills_samples_and_can_seed_nuts(tmp_path):
     from pycream2 import reporting
     html = reporting.generate_report(ef, tmp_path / "report").read_text()
     assert "direct solve" in html and "divergent transitions" not in html
+    assert "Direct-solve reproducibility" in html
 
     ef.fit(num_warmup=5, num_samples=5, progress_bar=False, init_from_optimum=True)
     assert "S_raw" in ef.samples
@@ -196,7 +269,13 @@ def test_optimise_laplace_matches_nuts():
         for name, d in data["bands"].items():
             ef.add_lightcurve(name, wavelength=d["wavelength"], t=d["t"], y=d["y"], yerr=d["yerr"])
         ef.build_grid(n_freq=30, n_tau=200)
-        ef.optimise() if direct else ef.fit(num_warmup=500, num_samples=500, progress_bar=False)
+        if direct:
+            ef.optimise(restart_scale=1.0)
+            # Real light curves: every restart, from widely spread starts,
+            # must reach the same optimum.
+            assert ef.optimise_timings["restarts_agreeing"] == 4
+        else:
+            ef.fit(num_warmup=500, num_samples=500, progress_bar=False)
         fits.append(np.asarray(ef.samples["log_mdot"]))
     laplace, nuts = fits
     assert abs(laplace.mean() - nuts.mean()) < 0.5 * nuts.std()

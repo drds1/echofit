@@ -89,8 +89,11 @@ def test_thin_disk_response_smoothing_days_zero_gives_exact_mean_lag_independenc
     claim should hold tightly, not just approximately -- this is the
     "escape hatch" for anyone who wants that exactness back at the cost of
     the visible kink the default smoothing exists to remove (see the next
-    test)."""
-    tau_grid = jnp.linspace(-1.0, 8.0, 800)
+    test). Since the lamppost-dilution fix the response is compact, with a
+    sharp contribution from just outside the ISCO at high inclination, so
+    the grid must be fine: at 800 points the quadrature alone drifted 2%,
+    at 8000 points 0.2%."""
+    tau_grid = jnp.linspace(-1.0, 8.0, 8000)
     tau_np = np.asarray(tau_grid)
 
     lags = []
@@ -106,15 +109,15 @@ def test_thin_disk_response_smoothing_days_zero_gives_exact_mean_lag_independenc
 
 
 def test_thin_disk_response_default_smoothing_mean_lag_drift_is_bounded():
-    """The default smoothing_frac=0.4 (chosen to match Starkey+2016 Figure
-    3's shape, see docs/thin_disk_response.md section 4) trades some of
-    the smoothing_days=0.0 exactness above for a smoother curve: causal
+    """The default smoothing (smoothing_frac=0.1; 0.4 until September 2026,
+    see thin_disk_response's docstring) trades some of the
+    smoothing_days=0.0 exactness above for a smoother curve: causal
     smoothing near a boundary that a high-inclination response sits much
     closer to than a face-on one inherently breaks perfect mean-lag
-    independence. This is a deliberate, discussed trade-off (not a bug),
-    but the drift should stay in the ballpark it was chosen at (~10%
-    face-on to 80 degrees) -- this catches an accidental regression to
-    something much larger, not a change in the trade-off itself."""
+    independence. This is a deliberate trade-off (not a bug), but the drift
+    should stay in the ballpark it was chosen at (~7% face-on to 80
+    degrees) -- this catches an accidental regression to something much
+    larger, not a change in the trade-off itself."""
     tau_grid = jnp.linspace(-1.0, 8.0, 800)
     tau_np = np.asarray(tau_grid)
 
@@ -127,7 +130,7 @@ def test_thin_disk_response_default_smoothing_mean_lag_drift_is_bounded():
 
     drift = abs(lags[-1] - lags[0]) / lags[0]
     assert 0.03 < drift < 0.2, (
-        f"expected the default smoothing's mean-lag drift to stay near the ~10% it was "
+        f"expected the default smoothing's mean-lag drift to stay near the ~7% it was "
         f"chosen at (face-on to 80 degrees), got {drift:.4f} -- see docs/thin_disk_response.md"
     )
 
@@ -184,13 +187,46 @@ def test_thin_disk_response_is_usable_via_the_existing_swap_mechanism():
 
 
 def test_disk_temperature_profile_matches_wien_law_at_the_reference_radius():
-    """T(tau_ref) should equal the Wien's-law reference temperature exactly
-    -- this is the same anchor point thin_disk_response's own internal
-    computation uses to set its absolute temperature scale."""
-    M_BH, wavelength, log_mdot = 1e8, 5000.0, 0.0
-    tau_ref = lag_scaling(log_mdot, wavelength, M_BH)
-    T = float(disk_temperature_profile(tau_ref, log_mdot, wavelength, M_BH))
-    assert T == pytest.approx(_WIEN_B_ANGSTROM_KELVIN / wavelength, rel=1e-5)
+    """The power law T_1 r**(-3/4) reaches the Wien temperature b/lambda
+    exactly at lag_scaling's tau_ref(lambda), at every wavelength (so T_1 is
+    wavelength-independent); the full profile adds the ISCO factor
+    (1 - sqrt(r_in/r))**(1/4) on top."""
+    M_BH, log_mdot = 1e8, 0.0
+    r_in = 3.0 * _schwarzschild_radius_light_days(M_BH)
+    for wavelength in (1500.0, 5000.0, 9000.0):
+        tau_ref = lag_scaling(log_mdot, wavelength, M_BH)
+        T = float(disk_temperature_profile(tau_ref, log_mdot, wavelength, M_BH))
+        inner = (1.0 - np.sqrt(r_in / tau_ref)) ** 0.25
+        assert T == pytest.approx(_WIEN_B_ANGSTROM_KELVIN / wavelength * inner, rel=1e-5)
+
+
+def test_disk_temperature_profile_does_not_depend_on_wavelength_for_any_slope():
+    """The disk's temperature is a property of the disk: the profile must not
+    change with the observing wavelength, whatever the slope (before
+    September 2026 it did, for any slope other than 0.75)."""
+    r = jnp.array([0.3, 1.0, 5.0])
+    for slope in (0.75, 1.0):
+        a = np.asarray(disk_temperature_profile(r, 0.5, 1500.0, 1e8, viscous_slope=slope))
+        b = np.asarray(disk_temperature_profile(r, 0.5, 9000.0, 1e8, viscous_slope=slope))
+        assert np.allclose(a, b, rtol=1e-6)
+
+
+def test_thin_disk_mean_lag_obeys_the_standard_lag_temperature_relation():
+    """Regression test for the missing lamppost dilution (h_x/x**3) in the
+    response weight: with it, the mean delay of the unsmoothed response
+    satisfies <tau> = (X k lambda T_1 / hc)**(4/3) light-days with X ~ 3.2
+    (responsivity-weighted, including the ISCO term) at every wavelength and
+    inclination. Without it X came out ~8, a ~3x temperature error."""
+    from pycream2.forward_model import disk_t1_kelvin
+    tau = jnp.linspace(0.0, 40.0, 8000)
+    tau_np = np.asarray(tau)
+    t1 = float(disk_t1_kelvin(1.0, 10 ** 7.5))
+    for wavelength in (1367.0, 9157.0):
+        for inclination in (0.0, 45.0):
+            psi = np.asarray(thin_disk_response(tau, 1.0, wavelength, inclination, 10 ** 7.5, smoothing_days=0.0))
+            mean = _np_trapz(psi * tau_np, tau_np) / _np_trapz(psi, tau_np)
+            x_eff = 1.4387773538e8 / (wavelength * t1) * mean ** 0.75
+            assert 3.0 < x_eff < 3.4, (wavelength, inclination, x_eff)
 
 
 def test_disk_temperature_profile_vanishes_at_the_isco():
